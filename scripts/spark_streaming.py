@@ -162,14 +162,27 @@ def make_write_valid_partition(db_host: str, db_port: str, db_name: str, db_user
 
 
 def write_valid_to_postgres(valid_df: DataFrame) -> None:
-    """Distribute the upsert across partitions - see make_write_valid_partition()."""
+    """
+    Distribute the upsert across partitions - see make_write_valid_partition().
+
+    repartition(4) caps the number of psycopg2 connections opened per
+    batch to 4, regardless of Spark's default parallelism (which
+    matched the machine's core count and opened ~20 connections for a
+    single small batch during initial testing, adding well over two
+    minutes of pure connection overhead for just 40 rows).
+    """
     writer = make_write_valid_partition(
         config.DB_HOST, config.DB_PORT, config.DB_NAME, config.DB_USER, config.DB_PASSWORD,
     )
-    valid_df.select(
-        "event_id", "user_id", "product_id", "event_type",
-        "price", "quantity", "category", "event_timestamp",
-    ).foreachPartition(writer)
+    (
+        valid_df
+        .repartition(4)
+        .select(
+            "event_id", "user_id", "product_id", "event_type",
+            "price", "quantity", "category", "event_timestamp",
+        )
+        .foreachPartition(writer)
+    )
 
 
 def write_rejected_to_postgres(rejected_df: DataFrame, jdbc_url: str) -> None:
