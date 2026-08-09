@@ -1,5 +1,7 @@
 # Architecture
 
+![Architecture Diagram](../diagrams/architecture.png)
+
 ## Component Overview
 
 ```

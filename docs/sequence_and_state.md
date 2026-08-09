@@ -4,6 +4,8 @@ Architecture (see architecture.md) shows the static component layout. This docum
 
 ## Sequence: One Micro-Batch, Start to Finish
 
+![Sequence Diagram](../diagrams/sequence_diagram.png)
+
 ```
 1. data_generator.py writes a new CSV file into data/incoming/
 
@@ -42,6 +44,8 @@ Architecture (see architecture.md) shows the static component layout. This docum
 **Key ordering detail worth naming explicitly:** archiving happens LAST, only after both database writes succeed. If either write throws an exception, the source file remains in data/incoming/, untouched - meaning the next trigger (or a restart, via the checkpoint) will retry the same file rather than silently losing it. This ordering is what makes the pipeline's error handling in error_handling_and_recovery.md actually work.
 
 ## State: Lifecycle of a Single Record
+
+![State Diagram](../diagrams/state_diagram.png)
 
 ```
 Generated
