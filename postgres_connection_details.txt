@@ -1,0 +1,25 @@
+PostgreSQL Connection Details
+==============================
+
+This file is a required deliverable per the project brief. It contains
+PLACEHOLDER values, not real credentials - see the note below.
+
+Host:     localhost
+Port:     5432
+Database: ecommerce_events
+User:     postgres
+Password: <see .env - not committed to this repository>
+
+Note on this file's contents (see docs/engineering_decisions.md for
+the full reasoning):
+
+Real credentials are stored in a local .env file, which is explicitly
+excluded from version control via .gitignore. This file exists to
+satisfy the brief's requirement for a connection-details deliverable
+while avoiding the security anti-pattern of committing real database
+credentials to a public repository. To connect to a locally running
+instance of this project:
+
+  1. Copy .env.example to .env
+  2. Fill in your own PostgreSQL username and password
+  3. config.py reads these values automatically at runtime
