@@ -29,7 +29,7 @@ Manual test plan covering scenarios beyond the automated unit tests in tests/tes
 | 16 | Row violating multiple rules at once | Tagged with the FIRST rule checked, per the fixed priority order | Automated test passes | PASS |
 | 17 | Empty CSV file | Not explicitly tested | - | UNTESTED |
 | 18 | CSV with header only, no data rows | Not explicitly tested | - | UNTESTED |
-| 19 | Extra/unexpected columns in a CSV | Not explicitly tested; Spark's explicit schema should ignore extras | - | UNTESTED |
+| 19 | Extra/unexpected columns in a CSV | Rejected via Spark's PERMISSIVE mode + `_corrupt_record` column, tagged `malformed_csv_row` | Confirmed: a deliberately malformed row (extra fields) was correctly caught and rejected | PASS |
 | 20 | Missing expected columns in a CSV | Not explicitly tested; likely produces nulls, triggering existing null-checks | - | UNTESTED |
 | 21 | Very large single file | Not explicitly tested at scale beyond ~60 rows/file in testing | - | UNTESTED |
 

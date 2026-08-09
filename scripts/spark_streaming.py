@@ -42,7 +42,10 @@ EVENT_SCHEMA = StructType([
     StructField("quantity", StringType(), True),
     StructField("category", StringType(), True),
     StructField("event_timestamp", StringType(), True),
+    StructField("_corrupt_record", StringType(), True),
 ])
+
+CORRUPT_RECORD_COLUMN = "_corrupt_record"
 
 
 def build_spark_session() -> SparkSession:
@@ -62,10 +65,18 @@ def read_incoming_stream(spark: SparkSession) -> DataFrame:
     Read the incoming folder as a stream, tagging each row with its
     source file path via input_file_name() - needed later so we know
     exactly which files can be safely archived once a batch succeeds.
+
+    columnNameOfCorruptRecord + PERMISSIVE mode: a structurally broken
+    CSV row (wrong field count, unparseable structure) is not silently
+    dropped or partially nulled - its raw text is captured in
+    _corrupt_record, which tag_validation_result() checks first,
+    before any of the normal field-level validation rules run.
     """
     return (
         spark.readStream
         .option("header", "true")
+        .option("mode", "PERMISSIVE")
+        .option("columnNameOfCorruptRecord", CORRUPT_RECORD_COLUMN)
         .schema(EVENT_SCHEMA)
         .csv(str(config.INCOMING_DIR))
         .withColumn("_source_file", F.input_file_name())
@@ -90,7 +101,8 @@ def tag_validation_result(df: DataFrame) -> DataFrame:
     """Tag each row with its rejection_reason (or null if valid)."""
     return df.withColumn(
         "rejection_reason",
-        F.when(F.col("user_id").isNull(), F.lit("missing_or_invalid_user_id"))
+        F.when(F.col(CORRUPT_RECORD_COLUMN).isNotNull(), F.lit("malformed_csv_row"))
+         .when(F.col("user_id").isNull(), F.lit("missing_or_invalid_user_id"))
          .when(F.col("product_id").isNull(), F.lit("missing_or_invalid_product_id"))
          .when(~F.col("event_type").isin(config.ALLOWED_EVENT_TYPES), F.lit("invalid_event_type"))
          .when(F.col("price").isNull() | (F.col("price") < 0), F.lit("invalid_or_negative_price"))
