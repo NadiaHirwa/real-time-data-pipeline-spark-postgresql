@@ -102,11 +102,14 @@ def tag_validation_result(df: DataFrame) -> DataFrame:
     return df.withColumn(
         "rejection_reason",
         F.when(F.col(CORRUPT_RECORD_COLUMN).isNotNull(), F.lit("malformed_csv_row"))
+         .when(~F.col("event_id").rlike(config.UUID_PATTERN), F.lit("invalid_event_id_format"))
          .when(F.col("user_id").isNull(), F.lit("missing_or_invalid_user_id"))
          .when(F.col("product_id").isNull(), F.lit("missing_or_invalid_product_id"))
          .when(~F.col("event_type").isin(config.ALLOWED_EVENT_TYPES), F.lit("invalid_event_type"))
          .when(F.col("price").isNull() | (F.col("price") < 0), F.lit("invalid_or_negative_price"))
+         .when(F.col("price") > config.MAX_PRICE, F.lit("price_exceeds_maximum"))
          .when(F.col("quantity").isNull() | (F.col("quantity") <= 0), F.lit("invalid_or_zero_quantity"))
+         .when(F.col("quantity") > config.MAX_QUANTITY, F.lit("quantity_exceeds_maximum"))
          .when(F.col("event_timestamp").isNull(), F.lit("unparseable_timestamp"))
          .when(F.col("event_timestamp") > F.current_timestamp() + F.expr("INTERVAL 5 MINUTES"),
                F.lit("future_timestamp"))

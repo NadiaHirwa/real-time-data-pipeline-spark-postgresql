@@ -5,12 +5,12 @@ The enforceable rules every record must satisfy before it is considered valid. T
 | Field | Rule | On Violation |
 |---|---|---|
 | `event_type` | MUST be exactly `view` or `purchase` (case-sensitive, after normalization to lowercase) | REJECT |
-| `price` | MUST be >= 0 | REJECT |
-| `quantity` | MUST be > 0 | REJECT |
+| `price` | MUST be >= 0 AND <= 10,000.00 | REJECT, tagged `invalid_or_negative_price` or `price_exceeds_maximum` |
+| `quantity` | MUST be > 0 AND <= 100 | REJECT, tagged `invalid_or_zero_quantity` or `quantity_exceeds_maximum` |
 | `user_id` | MUST NOT be null | REJECT |
 | `product_id` | MUST NOT be null | REJECT |
 | `event_timestamp` | MUST be a parseable timestamp, AND must not be more than a small tolerance (e.g. 5 minutes) in the future relative to processing time | REJECT |
-| `event_id` | MUST be unique within a micro-batch | Duplicate dropped via `dropDuplicates()`; count logged, original-plus-duplicate not treated as two separate rejects |
+| `event_id` | MUST match standard UUID format (8-4-4-4-12 hex), AND MUST be unique within a micro-batch | REJECT (tagged `invalid_event_id_format`) if malformed; duplicate dropped via `dropDuplicates()` if a repeat, not treated as a reject |
 | `<entire row>` | MUST be a structurally valid CSV row (correct field count, parseable by Spark's CSV reader) | REJECT (tagged `malformed_csv_row`) |
 
 ## Normalization Applied Before Contract Checks

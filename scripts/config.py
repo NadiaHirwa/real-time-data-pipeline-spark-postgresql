@@ -53,6 +53,9 @@ GENERATOR_EVENTS_PER_FILE = int(os.getenv("GENERATOR_EVENTS_PER_FILE", "20"))
 #     source of truth that both the generator and Spark validation can
 #     import, rather than duplicating these values in two places) ---
 ALLOWED_EVENT_TYPES = ["view", "purchase"]
+MAX_PRICE = 10_000.00
+MAX_QUANTITY = 100
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 
 def ensure_directories() -> None:

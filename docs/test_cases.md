@@ -41,6 +41,9 @@ Manual test plan covering scenarios beyond the automated unit tests in tests/tes
 | 23 | PostgreSQL unreachable during a batch | Batch fails, files remain in data/incoming/ for retry, no crash of the whole streaming job | Not deliberately triggered (Postgres was kept running throughout testing) | UNTESTED |
 | 24 | Checkpoint directory manually deleted | Job would restart from scratch, reprocessing all historical files | Not tested; expected behavior based on Spark's documented checkpoint semantics | UNTESTED |
 | 25 | main.py clean run while streaming job is active | Checkpoint clearing may partially fail due to file locks (observed) | Confirmed: produced a clear warning rather than a crash | PASS (defensive handling confirmed) |
+| 26 | event_id not matching UUID format | Rejected, tagged invalid_event_id_format | Confirmed via targeted test | PASS |
+| 27 | Price/quantity exceeding realistic upper bounds | Rejected, tagged price_exceeds_maximum / quantity_exceeds_maximum | Confirmed via targeted test | PASS |
+
 
 ## Note on Untested Scenarios
 
