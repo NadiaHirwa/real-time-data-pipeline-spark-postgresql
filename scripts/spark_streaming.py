@@ -116,47 +116,85 @@ def split_valid_and_rejected(df: DataFrame) -> tuple[DataFrame, DataFrame]:
 def make_write_valid_partition(db_host: str, db_port: str, db_name: str, db_user: str, db_password: str):
     """
     Returns a self-contained partition-writer function with the DB
-    credentials captured as plain strings in its closure.
+    credentials captured as plain strings in its closure, and its own
+    inline retry/classification logic.
 
-    This indirection exists because of a real, easy-to-miss Spark
-    pitfall on Windows local[*]: functions passed to foreachPartition
-    run in SEPARATE worker subprocesses, which do NOT inherit the
-    driver's sys.path.append() calls. A version of this function that
-    referenced config.DB_HOST etc. directly would require the worker
-    to `import config` itself and fail with ModuleNotFoundError,
+    IMPORTANT: this function must never reference a custom project
+    module (config, retry, errors, monitoring_logger) by name inside
+    its body. Functions passed to foreachPartition run in SEPARATE
+    worker subprocesses on Windows local[*], which do not inherit the
+    driver's sys.path.append() calls - a worker trying to "import
+    retry" (or any other project module) fails with ModuleNotFoundError,
     which crashes the worker process outright rather than raising a
-    catchable Python exception - manifesting as Spark's cryptic
-    "Python worker exited unexpectedly" error. Capturing plain string
-    values here means the worker needs no custom module imports at all.
+    catchable Python exception. This exact bug was hit twice: once
+    with `config`, once with `retry` - see docs/engineering_decisions.md.
+    Only genuinely pip-installed packages (psycopg2, random, time) and
+    plain captured values are safe to use here.
     """
+    import random
+    import time
+
+    RETRYABLE_SQLSTATE_PREFIXES = ("08", "53")
+    RETRYABLE_SQLSTATES = {"40001", "40P01", "55P03", "57P01", "57P02", "57P03"}
+    MAX_ATTEMPTS = 5
+    BASE_DELAY = 0.5
+    MAX_DELAY = 15.0
+
+    def _is_transient(exc) -> bool:
+        sqlstate = getattr(exc, "pgcode", None)
+        if sqlstate:
+            return sqlstate in RETRYABLE_SQLSTATES or sqlstate.startswith(RETRYABLE_SQLSTATE_PREFIXES)
+        text = str(exc).lower()
+        markers = ("connection refused", "connection reset", "could not connect",
+                   "starting up", "terminating connection", "deadlock detected",
+                   "too many clients", "timeout", "broken pipe")
+        return any(m in text for m in markers)
+
     def write_valid_partition(rows) -> None:
         rows = list(rows)
         if not rows:
             return
 
-        conn = psycopg2.connect(
-            host=db_host, port=db_port, dbname=db_name,
-            user=db_user, password=db_password,
-        )
-        try:
-            with conn.cursor() as cur:
-                execute_values(
-                    cur,
-                    """
-                    INSERT INTO events
-                        (event_id, user_id, product_id, event_type, price, quantity, category, event_timestamp)
-                    VALUES %s
-                    ON CONFLICT (event_id) DO NOTHING;
-                    """,
-                    [
-                        (r.event_id, r.user_id, r.product_id, r.event_type,
-                         r.price, r.quantity, r.category, r.event_timestamp)
-                        for r in rows
-                    ],
-                )
-            conn.commit()
-        finally:
-            conn.close()
+        def _write():
+            conn = psycopg2.connect(
+                host=db_host, port=db_port, dbname=db_name,
+                user=db_user, password=db_password,
+            )
+            try:
+                with conn.cursor() as cur:
+                    execute_values(
+                        cur,
+                        """
+                        INSERT INTO events
+                            (event_id, user_id, product_id, event_type, price, quantity, category, event_timestamp)
+                        VALUES %s
+                        ON CONFLICT (event_id) DO NOTHING;
+                        """,
+                        [
+                            (r.event_id, r.user_id, r.product_id, r.event_type,
+                             r.price, r.quantity, r.category, r.event_timestamp)
+                            for r in rows
+                        ],
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+        last_exc = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                _write()
+                return
+            except Exception as exc:
+                if not _is_transient(exc):
+                    raise
+                last_exc = exc
+                if attempt == MAX_ATTEMPTS:
+                    break
+                backoff = min(MAX_DELAY, BASE_DELAY * (2 ** (attempt - 1)))
+                time.sleep(random.uniform(0.0, backoff))
+
+        raise last_exc
 
     return write_valid_partition
 
@@ -166,10 +204,12 @@ def write_valid_to_postgres(valid_df: DataFrame) -> None:
     Distribute the upsert across partitions - see make_write_valid_partition().
 
     repartition(4) caps the number of psycopg2 connections opened per
-    batch to 4, regardless of Spark's default parallelism (which
-    matched the machine's core count and opened ~20 connections for a
-    single small batch during initial testing, adding well over two
-    minutes of pure connection overhead for just 40 rows).
+    batch to 4, regardless of Spark's default parallelism. Without
+    this, local[*] splits even a small batch across ~20 partitions,
+    each paying its own connection-setup cost - the exact issue
+    diagnosed and fixed earlier (see performance_metrics.md); it was
+    accidentally dropped when this function was rewritten to fix the
+    retry-logic import bug, and is restored here.
     """
     writer = make_write_valid_partition(
         config.DB_HOST, config.DB_PORT, config.DB_NAME, config.DB_USER, config.DB_PASSWORD,
