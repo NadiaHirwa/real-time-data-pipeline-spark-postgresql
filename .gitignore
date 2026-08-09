@@ -1,0 +1,29 @@
+master_plan.md
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# Data - generated/runtime, not source
+data/incoming/*
+data/processed_archive/*
+data/rejected/*
+!data/incoming/.gitkeep
+!data/processed_archive/.gitkeep
+!data/rejected/.gitkeep
+
+# Spark
+checkpoint/
+metastore_db/
+derby.log
+spark-warehouse/
+
+# Logs
+logs/*
+!logs/.gitkeep
