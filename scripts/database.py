@@ -94,6 +94,23 @@ def rows_per_minute() -> list[tuple]:
     )
 
 
+def rejection_reason_breakdown() -> list[tuple]:
+    """
+    Counts rejected rows by reason - the core input for
+    docs/data_quality_report.md. Grouping by reason turns the raw
+    rejected_events table into an actionable summary: which specific
+    contract rule is triggering most often.
+    """
+    return run_query(
+        """
+        SELECT rejection_reason, COUNT(*) AS count
+        FROM rejected_events
+        GROUP BY rejection_reason
+        ORDER BY count DESC;
+        """
+    )
+
+
 if __name__ == "__main__":
     if test_connection():
         print(f"Total events: {row_count()}")
