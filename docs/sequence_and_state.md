@@ -20,28 +20,44 @@ Architecture (see architecture.md) shows the static component layout. This docum
    (a value that fails to cast becomes null, not a crash)
 
 4. tag_validation_result() checks each data_contract.md rule in a
-   fixed order, attaching a rejection_reason (or null if valid)
+   fixed order, attaching a rejection_reason (or null if valid).
+   Checked in this order: malformed CSV structure (_corrupt_record)
+   -> event_id UUID format -> missing user_id/product_id -> invalid
+   event_type -> price bounds (negative, then over MAX_PRICE) ->
+   quantity bounds (zero/negative, then over MAX_QUANTITY) ->
+   timestamp (unparseable, then too far in the future)
 
 5. split_valid_and_rejected() separates the batch into two DataFrames:
    - valid_df: rejection_reason is null, dropDuplicates() applied
    - rejected_df: rejection_reason is not null
 
 6. Inside process_batch() (called once per micro-batch by foreachBatch):
-   a. write_valid_to_postgres(valid_df) - repartition(4), then each
-      partition opens its own psycopg2 connection and bulk-upserts
-      with ON CONFLICT DO NOTHING
-   b. write_rejected_to_postgres(rejected_df) - Spark's standard
+   a. write_valid_to_postgres(valid_df, run_id, batch_id) - Spark's
+      bulk JDBC writer appends valid_df into staging_events, tagged
+      with the current run_id and batch_id
+   b. merge_staging_to_events(run_id, batch_id) - on the driver, via
+      a plain psycopg2 connection: acquires a Postgres advisory lock,
+      runs INSERT INTO events SELECT ... FROM staging_events WHERE
+      run_id = ? AND batch_id = ? ON CONFLICT (event_id) DO NOTHING,
+      deletes the now-merged staging rows, releases the lock
+   c. write_rejected_to_postgres(rejected_df) - Spark's standard
       JDBC writer, simple append (no upsert needed, no unique
       constraint on rejected_events)
-   c. archive_source_files(batch_df) - ONLY reached if steps (a) and
-      (b) both completed without raising an exception; moves every
+   d. archive_source_files(batch_df) - ONLY reached if steps (a)-(c)
+      all completed without raising an exception; moves every
       source file referenced in this batch from data/incoming/ to
       data/processed_archive/
 
 7. The batch summary (valid count, rejected count) is logged
+
+   Independently of the above: MetricsListener.onQueryProgress()
+   fires automatically after the batch completes, writing Spark's
+   own internal timing (batch duration, rows/sec) to stream_metrics
+   - this happens outside process_batch(), driven by Spark's own
+   event system rather than being called explicitly in this sequence
 ```
 
-**Key ordering detail worth naming explicitly:** archiving happens LAST, only after both database writes succeed. If either write throws an exception, the source file remains in data/incoming/, untouched - meaning the next trigger (or a restart, via the checkpoint) will retry the same file rather than silently losing it. This ordering is what makes the pipeline's error handling in error_handling_and_recovery.md actually work.
+**Key ordering detail worth naming explicitly:** archiving happens LAST, only after the staging write, the merge, AND the rejected write all succeed. If any of these three steps throws an exception, the source file remains in data/incoming/, untouched - meaning the next trigger (or a restart, via the checkpoint) will retry the same file rather than silently losing it. This ordering is what makes the pipeline's error handling in error_handling_and_recovery.md actually work.
 
 ## State: Lifecycle of a Single Record
 
@@ -59,8 +75,10 @@ Processing
 
    then splits into one of two paths:
 
-Valid -> Stored
-   -> written to the events table
+Valid -> Staged -> Stored
+   -> written to staging_events, then merged into the events table
+      in the same batch (see engineering_decisions.md for why this
+      two-step path exists instead of a direct write)
 
 Rejected -> Quarantined
    -> written to the rejected_events table
