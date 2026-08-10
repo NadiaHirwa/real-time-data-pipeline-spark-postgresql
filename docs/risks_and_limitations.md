@@ -14,6 +14,9 @@ Distinct from Future Improvements: this document lists what the system genuinely
 
 ## Limitations
 
+- **Zero-row files are never archived.** A CSV file that is empty or contains only a header row (no data rows) is read correctly and produces no crash, but `archive_source_files()` determines which files to archive by inspecting the `_source_file` column of the batch's ROWS - a file with zero rows has no row referencing it, so it is never moved to `data/processed_archive/`. It remains in `data/incoming/` indefinitely (though it is also never reprocessed, since Spark's checkpoint tracks seen files independently of row count). Discovered via a targeted manual test - see `test_cases.md` rows 17-18.
+
+
 - **CSV-based simulation, not real streaming infrastructure.** This is an explicit, accepted constraint (see scope.md), not a limitation discovered after the fact - but it means findings here (throughput, latency) describe THIS specific architecture and would not directly transfer to a Kafka-based system.
 - **Single-machine testing only.** No distributed Spark cluster or networked PostgreSQL instance was tested; latency and throughput numbers in performance_metrics.md reflect local-machine conditions only.
 - **No automated tests for system-level failure scenarios** (database outage, mid-batch crash, deliberately corrupted CSV) - see test_cases.md's "System-Level Scenarios" section for the explicit list of what was and was not tested, and why.
