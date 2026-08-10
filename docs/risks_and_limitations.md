@@ -11,6 +11,7 @@ Distinct from Future Improvements: this document lists what the system genuinely
 | Large batch sizes | repartition(4) fix reduced connection overhead significantly (see performance_metrics.md) | Not tested beyond ~60 rows/batch; behavior at genuinely large batch sizes (thousands of rows) is unverified |
 | Schema drift (generator's CSV columns change unexpectedly) | Explicit schema declaration means a genuinely missing/renamed column would produce nulls, which existing validation would catch as missing_or_invalid_* | Column REORDERING or a wholly different file format would not be handled gracefully |
 | Windows file locks (observed directly during this project) | main.py clean now uses ignore_errors=True and reports failures instead of crashing | Underlying cause (OneDrive sync, possible lingering Java processes) not fully eliminated, only worked around defensively |
+| Merge step fails permanently after staging succeeds | The two steps run in separate transactions; a permanent failure in the merge (e.g. a type mismatch) leaves rows orphaned in `staging_events` indefinitely, since the `DELETE` never runs | No automatic cleanup exists for orphaned staging rows; a manual query (`SELECT * FROM staging_events WHERE run_id NOT IN (...)`) or periodic `TRUNCATE` would be needed in a real deployment |
 
 ## Limitations
 

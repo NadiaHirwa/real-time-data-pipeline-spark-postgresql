@@ -24,7 +24,7 @@ Concrete, non-exhaustive ideas for extending this project, organized by which pa
 - Containerize the whole pipeline (Docker Compose for Postgres + the Spark job) for consistent setup across machines - explicitly listed as a bonus in the original project guidance, not pursued here since PostgreSQL was already installed and working natively
 - Add automated alerting (e.g. a Slack webhook) on repeated batch failures, rather than relying on someone actively watching logs
 - Add a CI pipeline (GitHub Actions) running the pytest suite on every push, matching the pattern used in the companion TMDB Spark project
-
+- Add a scheduled cleanup job for orphaned `staging_events` rows (rows whose `run_id`/`batch_id` never successfully completed a merge), rather than relying on manual intervention
 ## Testing
 
 - Deliberately test the untested system-level scenarios listed in test_cases.md (database outage mid-batch, checkpoint deletion, corrupted CSV) rather than relying on Spark's documented-but-unverified-here guarantees

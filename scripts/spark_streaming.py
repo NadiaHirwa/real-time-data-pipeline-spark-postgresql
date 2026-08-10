@@ -19,6 +19,7 @@ writer directly.
 """
 
 import sys
+import uuid
 from pathlib import Path
 
 import psycopg2
@@ -128,116 +129,101 @@ def split_valid_and_rejected(df: DataFrame) -> tuple[DataFrame, DataFrame]:
     return valid_df, rejected_df
 
 
-def make_write_valid_partition(db_host: str, db_port: str, db_name: str, db_user: str, db_password: str):
+def write_valid_to_postgres(valid_df: DataFrame, jdbc_url: str, run_id: str, batch_id: int) -> None:
     """
-    Returns a self-contained partition-writer function with the DB
-    credentials captured as plain strings in its closure, and its own
-    inline retry/classification logic.
+    Bulk-write-then-merge upsert (see docs/engineering_decisions.md
+    for the full reasoning behind this replacing the earlier
+    foreachPartition/psycopg2 approach).
 
-    IMPORTANT: this function must never reference a custom project
-    module (config, retry, errors, monitoring_logger) by name inside
-    its body. Functions passed to foreachPartition run in SEPARATE
-    worker subprocesses on Windows local[*], which do not inherit the
-    driver's sys.path.append() calls - a worker trying to "import
-    retry" (or any other project module) fails with ModuleNotFoundError,
-    which crashes the worker process outright rather than raising a
-    catchable Python exception. This exact bug was hit twice: once
-    with `config`, once with `retry` - see docs/engineering_decisions.md.
-    Only genuinely pip-installed packages (psycopg2, random, time) and
-    plain captured values are safe to use here.
+    Step 1 (this function): Spark's own JDBC bulk writer appends
+    valid_df into staging_events, tagged with run_id + batch_id so
+    the merge step below can target exactly these rows. This runs
+    as a normal Spark write - no foreachPartition, no worker-side
+    custom-module-import risk.
     """
-    import random
-    import time
-
-    RETRYABLE_SQLSTATE_PREFIXES = ("08", "53")
-    RETRYABLE_SQLSTATES = {"40001", "40P01", "55P03", "57P01", "57P02", "57P03"}
-    MAX_ATTEMPTS = 5
-    BASE_DELAY = 0.5
-    MAX_DELAY = 15.0
-
-    def _is_transient(exc) -> bool:
-        sqlstate = getattr(exc, "pgcode", None)
-        if sqlstate:
-            return sqlstate in RETRYABLE_SQLSTATES or sqlstate.startswith(RETRYABLE_SQLSTATE_PREFIXES)
-        text = str(exc).lower()
-        markers = ("connection refused", "connection reset", "could not connect",
-                   "starting up", "terminating connection", "deadlock detected",
-                   "too many clients", "timeout", "broken pipe")
-        return any(m in text for m in markers)
-
-    def write_valid_partition(rows) -> None:
-        rows = list(rows)
-        if not rows:
-            return
-
-        def _write():
-            conn = psycopg2.connect(
-                host=db_host, port=db_port, dbname=db_name,
-                user=db_user, password=db_password,
-            )
-            try:
-                with conn.cursor() as cur:
-                    execute_values(
-                        cur,
-                        """
-                        INSERT INTO events
-                            (event_id, user_id, product_id, event_type, price, quantity, category, event_timestamp)
-                        VALUES %s
-                        ON CONFLICT (event_id) DO NOTHING;
-                        """,
-                        [
-                            (r.event_id, r.user_id, r.product_id, r.event_type,
-                             r.price, r.quantity, r.category, r.event_timestamp)
-                            for r in rows
-                        ],
-                    )
-                conn.commit()
-            finally:
-                conn.close()
-
-        last_exc = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                _write()
-                return
-            except Exception as exc:
-                if not _is_transient(exc):
-                    raise
-                last_exc = exc
-                if attempt == MAX_ATTEMPTS:
-                    break
-                backoff = min(MAX_DELAY, BASE_DELAY * (2 ** (attempt - 1)))
-                time.sleep(random.uniform(0.0, backoff))
-
-        raise last_exc
-
-    return write_valid_partition
-
-
-def write_valid_to_postgres(valid_df: DataFrame) -> None:
-    """
-    Distribute the upsert across partitions - see make_write_valid_partition().
-
-    repartition(4) caps the number of psycopg2 connections opened per
-    batch to 4, regardless of Spark's default parallelism. Without
-    this, local[*] splits even a small batch across ~20 partitions,
-    each paying its own connection-setup cost - the exact issue
-    diagnosed and fixed earlier (see performance_metrics.md); it was
-    accidentally dropped when this function was rewritten to fix the
-    retry-logic import bug, and is restored here.
-    """
-    writer = make_write_valid_partition(
-        config.DB_HOST, config.DB_PORT, config.DB_NAME, config.DB_USER, config.DB_PASSWORD,
-    )
     (
         valid_df
-        .repartition(4)
+        .withColumn("run_id", F.lit(run_id))
+        .withColumn("batch_id", F.lit(batch_id))
         .select(
-            "event_id", "user_id", "product_id", "event_type",
-            "price", "quantity", "category", "event_timestamp",
+            "run_id", "batch_id", "event_id", "user_id", "product_id",
+            "event_type", "price", "quantity", "category", "event_timestamp",
         )
-        .foreachPartition(writer)
+        .write
+        .format("jdbc")
+        .option("url", jdbc_url)
+        .option("dbtable", "staging_events")
+        .option("user", config.DB_USER)
+        .option("password", config.DB_PASSWORD)
+        .option("driver", "org.postgresql.Driver")
+        .mode("append")
+        .save()
     )
+
+
+# Fixed, arbitrary key for this pipeline's advisory lock. Postgres
+# advisory locks are keyed by integer, not name - this specific
+# number has no meaning beyond "the one this pipeline always uses,"
+# chosen once and never reused for anything else in this database.
+STAGING_MERGE_LOCK_KEY = 918273645
+
+
+def merge_staging_to_events(run_id: str, batch_id: int) -> None:
+    """
+    Step 2: move this batch's rows from staging_events into events,
+    upserting with ON CONFLICT DO NOTHING, then delete the staged
+    rows. Wrapped in a Postgres advisory lock so two runs sharing the
+    same staging table (e.g. an overlapping restart) can never merge
+    concurrently and interleave each other's rows.
+
+    event_id::uuid casts explicitly - staging_events.event_id is TEXT
+    (staging intentionally has no constraints, see postgres_setup.sql),
+    but events.event_id is UUID; Postgres will not implicitly convert
+    TEXT to UUID inside an INSERT...SELECT even when the text is a
+    valid UUID string.
+
+    If the INSERT/DELETE fails, the transaction is explicitly rolled
+    back BEFORE attempting to release the advisory lock - Postgres
+    refuses to run ANY further command, including pg_advisory_unlock,
+    on a transaction that already failed, so skipping the rollback
+    here would leave the lock held indefinitely on any real error.
+    """
+    conn = psycopg2.connect(
+        host=config.DB_HOST, port=config.DB_PORT, dbname=config.DB_NAME,
+        user=config.DB_USER, password=config.DB_PASSWORD,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s);", (STAGING_MERGE_LOCK_KEY,))
+            conn.commit()
+
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO events
+                        (event_id, user_id, product_id, event_type, price, quantity, category, event_timestamp)
+                    SELECT DISTINCT ON (event_id)
+                        event_id::uuid, user_id, product_id, event_type, price, quantity, category, event_timestamp
+                    FROM staging_events
+                    WHERE run_id = %s AND batch_id = %s
+                    ORDER BY event_id
+                    ON CONFLICT (event_id) DO NOTHING;
+                    """,
+                    (run_id, batch_id),
+                )
+                cur.execute(
+                    "DELETE FROM staging_events WHERE run_id = %s AND batch_id = %s;",
+                    (run_id, batch_id),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(%s);", (STAGING_MERGE_LOCK_KEY,))
+                conn.commit()
+    finally:
+        conn.close()
 
 
 def write_rejected_to_postgres(rejected_df: DataFrame, jdbc_url: str) -> None:
@@ -279,7 +265,7 @@ def archive_source_files(df: DataFrame) -> None:
             logger.info("Archived %s", file_path.name)
 
 
-def process_batch(batch_df: DataFrame, batch_id: int) -> None:
+def process_batch(batch_df: DataFrame, batch_id: int, run_id: str) -> None:
     """Called once per micro-batch by foreachBatch()."""
     cast_df = cast_and_normalize(batch_df)
     tagged_df = tag_validation_result(cast_df)
@@ -293,8 +279,9 @@ def process_batch(batch_df: DataFrame, batch_id: int) -> None:
     logger.info("Batch %d: %d valid, %d rejected", batch_id, valid_count, rejected_count)
 
     if valid_count > 0:
-        write_valid_to_postgres(valid_df)
-        logger.info("Batch %d: wrote %d valid rows to events", batch_id, valid_count)
+        write_valid_to_postgres(valid_df, config.JDBC_URL, run_id, batch_id)
+        merge_staging_to_events(run_id, batch_id)
+        logger.info("Batch %d: staged and merged %d valid rows into events", batch_id, valid_count)
 
     if rejected_count > 0:
         write_rejected_to_postgres(rejected_df, config.JDBC_URL)
@@ -314,11 +301,14 @@ def run(spark: SparkSession) -> None:
     """Read the stream and process each micro-batch through process_batch()."""
     config.ensure_directories()
 
+    run_id = str(uuid.uuid4())
+    logger.info("Streaming run starting with run_id=%s", run_id)
+
     stream_df = read_incoming_stream(spark)
 
     query = (
         stream_df.writeStream
-        .foreachBatch(process_batch)
+        .foreachBatch(lambda batch_df, batch_id: process_batch(batch_df, batch_id, run_id))
         .option("checkpointLocation", str(config.CHECKPOINT_DIR))
         .trigger(processingTime=f"{config.TRIGGER_INTERVAL_SECONDS} seconds")
         .start()
