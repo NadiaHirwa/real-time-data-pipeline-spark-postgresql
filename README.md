@@ -4,6 +4,68 @@ A data pipeline that simulates an e-commerce platform's user activity, streams i
 
 See [`docs/project_overview.md`](docs/project_overview.md) for a fuller description of what this is and why it's built this way.
 
+## Project Structure
+
+```
+real-time-data-pipeline-spark-postgresql/
+├── main.py                          # CLI dispatcher entry point
+├── requirements.txt
+├── .env.example
+├── postgres_connection_details.txt
+├── .github/
+│   └── workflows/
+│       └── ci.yml                   # Runs the full test suite on every push
+├── scripts/
+│   ├── data_generator.py            # Producer
+│   ├── spark_streaming.py           # Consumer - read, validate, write, archive
+│   ├── metrics_listener.py          # StreamingQueryListener -> stream_metrics
+│   ├── database.py                  # Connection + verification queries
+│   ├── config.py                    # Centralized configuration
+│   ├── errors.py                    # Error taxonomy (transient vs. permanent),
+│   │                                 #   used by tests/test_errors.py
+│   ├── retry.py                     # NOT currently used in production - superseded
+│   │                                 #   by inlined retry logic in spark_streaming.py
+│   │                                 #   (see engineering_decisions.md's standing rule)
+│   └── monitoring_logger.py         # Shared logging setup
+├── sql/
+│   ├── postgres_setup.sql           # Full schema: tables, indexes, views
+│   └── postgres_setup_ci.sql        # CI variant (skips CREATE DATABASE)
+├── tests/
+│   ├── test_spark_streaming.py      # 13 tests - validation logic in isolation
+│   ├── test_integration.py          # 3 tests - real staging+merge path, live Postgres
+│   └── test_errors.py               # 11 tests - error classification logic
+├── data/
+│   ├── incoming/                    # Landing zone (gitignored contents)
+│   └── processed_archive/           # Archived source files (gitignored contents)
+├── checkpoint/                      # Spark's streaming checkpoint (gitignored)
+├── logs/
+│   └── pipeline.log                 # (gitignored)
+├── diagrams/
+│   ├── architecture.png
+│   ├── sequence_diagram.png
+│   └── state_diagram.png
+└── docs/
+    ├── project_overview.md
+    ├── user_guide.md
+    ├── architecture.md
+    ├── sequence_and_state.md
+    ├── engineering_decisions.md
+    ├── data_dictionary.md
+    ├── data_contract.md
+    ├── performance_methodology.md
+    ├── performance_metrics.md
+    ├── data_quality_report.md
+    ├── test_cases.md
+    ├── acceptance_tests.md
+    ├── error_handling_and_recovery.md
+    ├── risks_and_limitations.md
+    ├── future_improvements.md
+    ├── scope.md
+    ├── assumptions_and_constraints.md
+    ├── naming_conventions.md
+    └── retention_policy.md
+```
+
 ## Deliverables
 
 | File | What it is |
