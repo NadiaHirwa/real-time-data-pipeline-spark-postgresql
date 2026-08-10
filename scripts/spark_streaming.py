@@ -50,13 +50,20 @@ CORRUPT_RECORD_COLUMN = "_corrupt_record"
 
 
 def build_spark_session() -> SparkSession:
-    """Create the SparkSession, wiring in the PostgreSQL JDBC driver."""
-    jdbc_jar_path = "file:///C:/spark-jars/postgresql-42.7.13.jar"
+    """
+    Create the SparkSession, wiring in the PostgreSQL JDBC driver via
+    Maven coordinates rather than a manually-downloaded local .jar
+    file. The original version hardcoded a Windows-specific path
+    (file:///C:/spark-jars/...), which does not exist on Linux CI
+    runners or any other machine - spark.jars.packages tells Spark to
+    fetch (and cache) the driver from Maven automatically, working
+    identically across Windows, Linux, and CI.
+    """
     return (
         SparkSession.builder
         .appName("EcommerceEventStreaming")
         .master("local[*]")
-        .config("spark.jars", jdbc_jar_path)
+        .config("spark.jars.packages", "org.postgresql:postgresql:42.7.3")
         .getOrCreate()
     )
 
