@@ -15,8 +15,7 @@ from pyspark.sql import SparkSession, Row
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from spark_streaming import cast_and_normalize, tag_validation_result
-
+from spark_streaming import cast_and_normalize, tag_validation_result, EVENT_SCHEMA
 
 @pytest.fixture(scope="module")
 def spark():
@@ -30,6 +29,13 @@ def make_raw_row(**overrides) -> Row:
     Build one raw (all-string) event row, matching EVENT_SCHEMA, with
     sensible valid defaults that individual tests override to trigger
     exactly one contract violation at a time.
+
+    _corrupt_record defaults to None (no corruption) - added after
+    EVENT_SCHEMA gained this column for malformed-CSV-row detection
+    (see docs/data_contract.md); without it, these manually-built
+    test rows lack the column entirely, since Spark infers a
+    DataFrame's schema from the Row objects' own fields when no
+    explicit schema is given, not from EVENT_SCHEMA itself.
     """
     defaults = {
         "event_id": "11111111-1111-1111-1111-111111111111",
@@ -40,6 +46,7 @@ def make_raw_row(**overrides) -> Row:
         "quantity": "1",
         "category": "Books",
         "event_timestamp": "2026-01-01 12:00:00",
+        "_corrupt_record": None,
     }
     defaults.update(overrides)
     return Row(**defaults)
@@ -47,7 +54,7 @@ def make_raw_row(**overrides) -> Row:
 
 def validate(spark, **overrides) -> str | None:
     """Run one row through cast_and_normalize + tag_validation_result, return its rejection_reason."""
-    df = spark.createDataFrame([make_raw_row(**overrides)])
+    df = spark.createDataFrame([make_raw_row(**overrides)], schema=EVENT_SCHEMA)
     result = tag_validation_result(cast_and_normalize(df))
     return result.collect()[0]["rejection_reason"]
 

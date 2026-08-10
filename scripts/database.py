@@ -47,11 +47,26 @@ def test_connection() -> bool:
 
 
 def run_query(query: str) -> list[tuple]:
-    """Run a read-only query and return all rows."""
+    """Run a read-only SELECT query and return all rows."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query)
             return cur.fetchall()
+
+
+def execute_statement(statement: str) -> None:
+    """
+    Run a non-SELECT statement (TRUNCATE, DELETE, etc.) that returns
+    no rows. Separate from run_query() because cur.fetchall() raises
+    an error when called after a statement that produces no result
+    set at all - this distinction surfaced as a real bug when
+    tests/test_integration.py's cleanup fixture tried to TRUNCATE
+    tables via run_query().
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(statement)
+        conn.commit()
 
 
 # --- Verification queries (see docs/data_contract.md) ---
