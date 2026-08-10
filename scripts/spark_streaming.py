@@ -311,6 +311,9 @@ def run(spark: SparkSession) -> None:
     run_id = str(uuid.uuid4())
     logger.info("Streaming run starting with run_id=%s", run_id)
 
+    from metrics_listener import MetricsListener
+    spark.streams.addListener(MetricsListener(run_id))
+
     stream_df = read_incoming_stream(spark)
 
     query = (

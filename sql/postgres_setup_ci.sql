@@ -54,5 +54,22 @@ CREATE TABLE IF NOT EXISTS staging_events (
     event_timestamp  TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS stream_metrics (
+    metric_id                 BIGSERIAL     PRIMARY KEY,
+    run_id                    TEXT          NOT NULL,
+    query_id                  TEXT          NOT NULL,
+    batch_id                  BIGINT        NOT NULL,
+    batch_timestamp           TIMESTAMPTZ   NOT NULL,
+    num_input_rows            BIGINT,
+    input_rows_per_second     DOUBLE PRECISION,
+    processed_rows_per_second DOUBLE PRECISION,
+    batch_duration_ms         BIGINT,
+    add_batch_ms              BIGINT,
+    get_batch_ms              BIGINT,
+    trigger_execution_ms      BIGINT,
+    recorded_at               TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, batch_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_staging_events_run_batch
     ON staging_events (run_id, batch_id);

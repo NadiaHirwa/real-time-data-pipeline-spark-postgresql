@@ -51,3 +51,52 @@ CREATE TABLE IF NOT EXISTS rejected_events (
     rejection_reason TEXT NOT NULL,
     rejected_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- Staging table for the bulk-write-then-merge upsert pattern used by
+-- write_valid_to_postgres() (see docs/engineering_decisions.md).
+-- Spark's JDBC writer bulk-appends here (fast - one operation, not
+-- one psycopg2 connection per partition); a separate SQL statement
+-- then merges from here into the real events table with an upsert.
+-- run_id + batch_id let the merge step target exactly the rows THIS
+-- batch just wrote, even if staging_events is shared across restarts
+-- or (in principle) concurrent runs. Deliberately has NO constraints,
+-- matching rejected_events' reasoning - validation already happened
+-- before rows reach this table; constraints here would only get in
+-- the way of the bulk write.
+CREATE TABLE IF NOT EXISTS staging_events (
+    run_id           TEXT NOT NULL,
+    batch_id         BIGINT NOT NULL,
+    event_id         TEXT,
+    user_id          INTEGER,
+    product_id       INTEGER,
+    event_type       TEXT,
+    price            NUMERIC(10, 2),
+    quantity         INTEGER,
+    category         TEXT,
+    event_timestamp  TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_staging_events_run_batch
+    ON staging_events (run_id, batch_id);
+
+-- One row per micro-batch, written automatically by a
+-- StreamingQueryListener (see spark_streaming.py's MetricsListener).
+-- This is what performance_metrics.md should ultimately be built
+-- from - Spark's own authoritative internal timing, rather than
+-- manually reading log timestamps and doing arithmetic by hand.
+CREATE TABLE IF NOT EXISTS stream_metrics (
+    metric_id                 BIGSERIAL     PRIMARY KEY,
+    run_id                    TEXT          NOT NULL,
+    query_id                  TEXT          NOT NULL,
+    batch_id                  BIGINT        NOT NULL,
+    batch_timestamp           TIMESTAMPTZ   NOT NULL,
+    num_input_rows            BIGINT,
+    input_rows_per_second     DOUBLE PRECISION,
+    processed_rows_per_second DOUBLE PRECISION,
+    batch_duration_ms         BIGINT,
+    add_batch_ms              BIGINT,
+    get_batch_ms              BIGINT,
+    trigger_execution_ms      BIGINT,
+    recorded_at               TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, batch_id)
+);
