@@ -27,3 +27,5 @@ spark-warehouse/
 # Logs
 logs/*
 !logs/.gitkeep
+
+refresh_checklist.md

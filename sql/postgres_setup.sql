@@ -100,3 +100,29 @@ CREATE TABLE IF NOT EXISTS stream_metrics (
     recorded_at               TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     UNIQUE (run_id, batch_id)
 );
+
+
+-- Backs data_quality_report.md directly
+CREATE OR REPLACE VIEW v_rejection_summary AS
+SELECT rejection_reason, COUNT(*) AS count,
+       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct_of_rejections
+FROM rejected_events
+GROUP BY rejection_reason
+ORDER BY count DESC;
+
+-- Backs performance_metrics.md directly
+CREATE OR REPLACE VIEW v_batch_performance AS
+SELECT run_id, batch_id, batch_timestamp, batch_duration_ms,
+       CASE WHEN batch_duration_ms > 5000 THEN 'over_trigger_interval' ELSE 'on_time' END AS trigger_status
+FROM stream_metrics
+ORDER BY batch_timestamp;
+
+-- Quick sanity check, backs main.py status
+CREATE OR REPLACE VIEW v_pipeline_health AS
+SELECT
+    (SELECT COUNT(*) FROM events) AS total_events,
+    (SELECT COUNT(*) FROM rejected_events) AS total_rejected,
+    (SELECT COUNT(*) FROM staging_events) AS orphaned_staging_rows,
+    (SELECT COUNT(*) FROM events e WHERE EXISTS (
+        SELECT 1 FROM events e2 WHERE e2.event_id = e.event_id GROUP BY e2.event_id HAVING COUNT(*) > 1
+    )) AS duplicate_events;
