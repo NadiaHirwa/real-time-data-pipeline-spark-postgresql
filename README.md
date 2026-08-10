@@ -9,12 +9,18 @@ See [`docs/project_overview.md`](docs/project_overview.md) for a fuller descript
 | File | What it is |
 |---|---|
 | [`scripts/data_generator.py`](scripts/data_generator.py) | Generates realistic e-commerce events as CSV files (the producer) |
-| [`scripts/spark_streaming.py`](scripts/spark_streaming.py) | Reads, validates, transforms, and writes events to PostgreSQL (the consumer) |
+| [`scripts/spark_streaming.py`](scripts/spark_streaming.py) | Reads, validates, transforms, and writes events to PostgreSQL via a staging-table + SQL-merge upsert (the consumer) |
+| [`scripts/metrics_listener.py`](scripts/metrics_listener.py) | StreamingQueryListener writing Spark's own per-batch timing to stream_metrics automatically |
 | [`scripts/database.py`](scripts/database.py) | Connection handling and SQL verification queries |
 | [`scripts/config.py`](scripts/config.py) | Centralized configuration - single source of truth for paths, credentials, and tunable settings |
-| [`sql/postgres_setup.sql`](sql/postgres_setup.sql) | Database and table creation, including constraints matching the data contract |
+| [`scripts/errors.py`](scripts/errors.py) | Error taxonomy distinguishing transient (retryable) from permanent database failures |
+| [`sql/postgres_setup.sql`](sql/postgres_setup.sql) | Database, table, and view creation, including constraints matching the data contract |
+| [`sql/postgres_setup_ci.sql`](sql/postgres_setup_ci.sql) | CI-specific schema (omits CREATE DATABASE, since the CI Postgres container creates it automatically) |
 | [`main.py`](main.py) | CLI dispatcher (generator / stream / verify / test / clean / status) |
-| [`tests/test_spark_streaming.py`](tests/test_spark_streaming.py) | 13 automated tests covering every data contract rule |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs the full 27-test suite against a real PostgreSQL service container on every push |
+| [`tests/test_spark_streaming.py`](tests/test_spark_streaming.py) | 13 tests covering every data contract validation rule |
+| [`tests/test_integration.py`](tests/test_integration.py) | 3 tests exercising the real staging+merge write path against a live PostgreSQL |
+| [`tests/test_errors.py`](tests/test_errors.py) | 11 tests covering the error classification logic, including a drift-guard against the inlined worker-side copy |
 | [`postgres_connection_details.txt`](postgres_connection_details.txt) | Connection details (placeholder values - see the file itself and docs/engineering_decisions.md for why) |
 | [`docs/project_overview.md`](docs/project_overview.md) | What this system does and how its pieces fit together |
 | [`docs/user_guide.md`](docs/user_guide.md) | Step-by-step setup and run instructions - start here to actually run it |
@@ -36,6 +42,7 @@ See [`docs/project_overview.md`](docs/project_overview.md) for a fuller descript
 | [`docs/naming_conventions.md`](docs/naming_conventions.md) | File, code, and database naming patterns used throughout |
 | [`docs/retention_policy.md`](docs/retention_policy.md) | How long each category of data is kept |
 | [`diagrams/`](diagrams/) | Architecture, sequence, and state diagrams (PNG) |
+| `v_rejection_summary`, `v_batch_performance`, `v_pipeline_health` | SQL views (in sql/postgres_setup.sql) backing the data quality and performance reports with reusable queries, rather than one-off hand-typed SQL |
 
 ## Quick Start
 
@@ -56,12 +63,13 @@ Full setup and troubleshooting: docs/user_guide.md.
 
 ## Key Results
 
-- 769 of 800 events (96.1%) correctly validated and stored in a single controlled test run, with 0 constraint violations and 0 duplicate IDs found across an entire day of repeated, overlapping testing
-- A genuine performance issue (the configured 5-second trigger interval being too aggressive for the write pattern) was found, diagnosed, and documented with a proposed fix - not hidden
-- A real bug (empty-string vs. null on zero-match array joins) was found and fixed via testing during development
+- 844 of 880 events (95.9%) correctly validated and stored across cumulative testing, with 0 constraint violations and 0 duplicate IDs found across an entire day of repeated, overlapping runs, restarts, and mid-development crashes
+- The staging table + SQL merge rewrite (replacing an earlier per-partition psycopg2 approach) cut last-file latency from ~13.4s to ~4.2s (~3.2x faster) and reduced trigger-interval overruns from 17 of 18 batches to 1 of 24
+- CI runs the full 27-test suite against a real PostgreSQL service container on every push - this caught a real, otherwise-invisible bug (a missing `pytest` entry in requirements.txt, masked locally by Anaconda's pre-installed copy)
+- Two real, previously-unknown gaps were found through deliberate edge-case testing and documented honestly rather than hidden: `stream_metrics.num_input_rows` reports a consistent, unexplained 3x multiple of the true row count, and zero-row files (empty or header-only CSVs) are read correctly but never archived
 
-See docs/performance_metrics.md and docs/data_quality_report.md for full detail.
+See [`docs/performance_metrics.md`](docs/performance_metrics.md), [`docs/data_quality_report.md`](docs/data_quality_report.md), and [`docs/risks_and_limitations.md`](docs/risks_and_limitations.md) for full detail.
 
 ## Tools
 
-Python, Apache Spark 4.2.0 (Structured Streaming), PostgreSQL, psycopg2, Faker, pytest, python-dotenv. Developed and tested on Windows with Java 17 (Eclipse Temurin).
+Python, Apache Spark 4.2.0 (Structured Streaming), PostgreSQL, psycopg2, Faker, pytest, python-dotenv, GitHub Actions. Developed and tested on Windows with Java 17 (Eclipse Temurin); CI runs on Ubuntu, confirming the pipeline is not accidentally Windows-specific.
