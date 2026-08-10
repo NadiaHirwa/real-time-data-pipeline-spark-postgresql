@@ -53,6 +53,10 @@ Prints total event counts, rejection counts, constraint violation checks, duplic
 
 ## Resetting for a Fresh Test
 
+**Important: only run this while the streaming job is stopped.** Running `python main.py clean` while `python main.py stream` is still active deletes the checkpoint directory out from under a live, running query - this was tested by accident during development and caused the streaming job to stop picking up new files correctly for the rest of that session. Stop the streaming job first (Ctrl+C), confirm it has exited, then run clean.
+
+
+
    python main.py clean
 
 Removes generated/archived CSV files and clears the Spark checkpoint. This does NOT touch database rows. To also clear stored data, run this manually in PostgreSQL (it is a destructive action and is deliberately not automated - see docs/retention_policy.md):
