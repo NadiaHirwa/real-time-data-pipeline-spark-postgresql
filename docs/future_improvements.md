@@ -13,7 +13,7 @@ Concrete, non-exhaustive ideas for extending this project, organized by which pa
 - ~~Implement a connection pool instead of opening a fresh connection per partition per batch~~ **Done** - superseded by the staging table + SQL merge rewrite, which eliminated per-partition connections entirely (see engineering_decisions.md and performance_metrics.md)
 - Add windowed aggregations (e.g. "purchases per minute") as a second, derived output alongside the raw event table - ties directly into DEM05's Structured Streaming windowing/watermarking content
 - Log ALL violated rules per row, not just the first matching one (see the deliberate simplification noted in data_contract.md)
-- Investigate the root cause of stream_metrics.num_input_rows reporting a consistent 3x multiple of the true row count (see risks_and_limitations.md) - not yet explained, timing fields are unaffected
+- ~~Investigate the stream_metrics.num_input_rows 3x multiplier~~ **Resolved** - re-investigated and found to be a measurement artifact (unfiltered queries mixing rows from multiple run_ids), not a real Spark bug; see risks_and_limitations.md for the corrected finding
 - Deliberately test the retry/backoff logic against a genuine PostgreSQL outage (e.g. stopping the service mid-batch), rather than only unit-testing the error classification logic in isolation (see test_cases.md)
 
 ## Storage
