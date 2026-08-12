@@ -258,10 +258,17 @@ def write_rejected_to_postgres(rejected_df: DataFrame, jdbc_url: str) -> None:
 
 def archive_source_files(df: DataFrame) -> None:
     """
-    Move every source CSV referenced in this batch from incoming/ to
+    Move every source CSV referenced in this batch from data/incoming/ to
     processed_archive/, so the landing folder doesn't grow unbounded
     and files are never reprocessed on a restart (see
     docs/retention_policy.md).
+
+    Known limitation: this derives the file list from row content
+    (distinct _source_file values), which means a file producing
+    ZERO rows (empty, or header-only) is never archived, since no
+    row exists anywhere to reference it. A fix using df.inputFiles()
+    was investigated and reverted - see docs/risks_and_limitations.md
+    for exactly why it doesn't work here.
     """
     source_files = [row["_source_file"] for row in df.select("_source_file").distinct().collect()]
     for file_uri in source_files:

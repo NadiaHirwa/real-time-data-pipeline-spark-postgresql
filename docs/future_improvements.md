@@ -18,7 +18,7 @@ Concrete, non-exhaustive ideas for extending this project, organized by which pa
 
 ## Storage
 
-- Fix the zero-row file archiving gap: track which files were actually READ this trigger (e.g. via Spark's own file-listing metadata, not row content), so empty/header-only files get archived like any other processed file, instead of accumulating in data/incoming/ indefinitely
+- Fix the zero-row file archiving gap properly, via filesystem-level tracking (list data/incoming/ before a trigger runs, archive exactly those files once the batch succeeds) rather than any DataFrame-level metadata. A fix using DataFrame.inputFiles() was investigated and confirmed NOT to work for this specific case - it returns empty for a zero-row Structured Streaming micro-batch, even though it works correctly on an equivalent plain batch read - see risks_and_limitations.md for the full investigation. This is a genuinely larger change (coordinating a pre-trigger file listing with a post-success archive step) than originally estimated, which is why it wasn't completed in this version
 - Add a retention policy with automated cleanup for data/processed_archive/ and logs/, rather than leaving them to grow indefinitely (see retention_policy.md)
 - Move database credentials from a checked-in postgres_connection_details.txt to a proper secrets manager, even for a local/demo deployment
 
