@@ -38,17 +38,17 @@ def _db_available() -> bool:
 pytestmark = pytest.mark.skipif(not _db_available(), reason="No reachable PostgreSQL instance")
 
 
-@pytest.fixture(scope="module")
-def spark():
-    session = (
-        SparkSession.builder
-        .appName("TestIntegration")
-        .master("local[1]")
-        .config("spark.jars.packages", "org.postgresql:postgresql:42.7.3")
-        .getOrCreate()
-    )
-    yield session
-    session.stop()
+# @pytest.fixture(scope="module")
+# def spark():
+#     session = (
+#         SparkSession.builder
+#         .appName("TestIntegration")
+#         .master("local[1]")
+#         .config("spark.jars.packages", "org.postgresql:postgresql:42.7.3")
+#         .getOrCreate()
+#     )
+#     yield session
+#     session.stop()
 
 
 @pytest.fixture(autouse=True)

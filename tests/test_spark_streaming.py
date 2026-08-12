@@ -17,11 +17,11 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from spark_streaming import cast_and_normalize, tag_validation_result, EVENT_SCHEMA
 
-@pytest.fixture(scope="module")
-def spark():
-    session = SparkSession.builder.appName("TestValidation").master("local[1]").getOrCreate()
-    yield session
-    session.stop()
+# @pytest.fixture(scope="module")
+# def spark():
+#     session = SparkSession.builder.appName("TestValidation").master("local[1]").getOrCreate()
+#     yield session
+#     session.stop()
 
 
 def make_raw_row(**overrides) -> Row:
