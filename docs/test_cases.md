@@ -36,6 +36,13 @@ Manual test plan covering scenarios beyond the automated tests in tests/test_spa
 | 23 | Price exceeding MAX_PRICE (10,000.00) | Rejected, tagged price_exceeds_maximum | Confirmed via a targeted manual test (price=999999.00) | PASS |
 | 24 | Quantity exceeding MAX_QUANTITY (100) | Rejected, tagged quantity_exceeds_maximum | Confirmed via a targeted manual test (quantity=500) | PASS |
 
+## Real Bugs Found by Comparing Against a Peer Implementation
+
+| # | Test | Expected | Actual | Status |
+|---|---|---|---|---|
+| 32 | event_type is genuinely NULL (not an invalid string) | Rejected, tagged invalid_event_type | A real bug: the original ~F.col("event_type").isin(...) check evaluated to NULL (not True) for a NULL input, so the row silently passed validation. Found by comparing against a peer implementation, confirmed with a failing test, fixed with an explicit isNull() guard | PASS (after fix) |
+| 33 | event_id is genuinely NULL | Rejected, tagged invalid_event_id_format | The same bug class as row 32, on the ~F.col("event_id").rlike(...) check - more severe, since event_id is the PRIMARY KEY. Same discovery and fix process | PASS (after fix) |
+
 ## Note on the Zero-Row File Archiving Gap (Discovered via Rows 17-18)
 
 A real limitation was discovered while testing empty and header-only CSV files: `archive_source_files()` determines which files to archive by looking at the `_source_file` column of the rows in a processed batch. A file that produces ZERO rows (empty, or header-only) has no row anywhere referencing it, so the archiving logic has no way to know it was ever read. Such files are correctly read without error and never reprocessed (Spark's checkpoint tracks "seen" files independently of row count), but they are also never moved to `data/processed_archive/` - they remain in `data/incoming/` indefinitely. This is documented as a known limitation in `risks_and_limitations.md` and `future_improvements.md`, not fixed in this version.
