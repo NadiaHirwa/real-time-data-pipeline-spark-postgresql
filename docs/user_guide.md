@@ -22,6 +22,9 @@ See docs/architecture.md for the exact Spark/PostgreSQL configuration used durin
 4. Create the database and tables:
    - Connect to PostgreSQL (e.g. via pgAdmin's Query Tool) and run the first line of sql/postgres_setup.sql (CREATE DATABASE ecommerce_events;) while connected to the default postgres database
    - Connect to the new ecommerce_events database and run the rest of sql/postgres_setup.sql
+
+   **Already have this database set up from before, and are pulling new changes?** Re-run sql/postgres_setup.sql against your existing database - not just on first setup. The script is idempotent: CREATE TABLE IF NOT EXISTS and ALTER TABLE ... ADD COLUMN IF NOT EXISTS statements are both safe to re-run and won't affect existing data. This matters specifically because rejected_events gained a new corrupt_record column recently; without re-running the setup script, the first rejected-row write after pulling this change will fail with a missing-column error.
+
 5. Verify everything is wired up correctly:
    python main.py status
    This should report all directories as [OK] and the database connection as OK.
