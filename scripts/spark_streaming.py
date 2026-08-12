@@ -309,6 +309,26 @@ def process_batch(batch_df: DataFrame, batch_id: int, run_id: str) -> None:
             write_rejected_to_postgres(rejected_df, config.JDBC_URL)
             logger.info("Batch %d: wrote %d rejected rows to rejected_events", batch_id, rejected_count)
 
+        # This manual archiving call is deliberate, not a leftover. Three
+        # separate attempts to close the zero-row-file archiving gap (a
+        # file that is empty or header-only is never archived) were
+        # investigated and all three reverted:
+        #   (a) deriving the file list from row content (what this function
+        #       still does) - cannot see a zero-row file, because no row
+        #       exists anywhere referencing it;
+        #   (b) DataFrame.inputFiles() - returns empty specifically for a
+        #       zero-row Structured Streaming micro-batch, even though it
+        #       correctly lists the same files on an equivalent plain
+        #       batch read;
+        #   (c) Spark's own cleanSource=archive option - correctly
+        #       IDENTIFIES the files to archive (including zero-row ones),
+        #       but fails to actually move them on Windows with "Mkdirs
+        #       failed", because it builds a destination path that nests
+        #       the original absolute path - drive letter included - as a
+        #       folder segment (e.g. .../processed_archive/C:/Users/...),
+        #       and Windows does not allow a colon inside a path segment.
+        # See docs/risks_and_limitations.md for the full investigation
+        # history behind each of the three.
         archive_source_files(batch_df)
 
         valid_df.unpersist()
