@@ -113,7 +113,10 @@ def tag_validation_result(df: DataFrame) -> DataFrame:
          .when(~F.col("event_id").rlike(config.UUID_PATTERN), F.lit("invalid_event_id_format"))
          .when(F.col("user_id").isNull(), F.lit("missing_or_invalid_user_id"))
          .when(F.col("product_id").isNull(), F.lit("missing_or_invalid_product_id"))
-         .when(~F.col("event_type").isin(config.ALLOWED_EVENT_TYPES), F.lit("invalid_event_type"))
+         .when(
+            F.col("event_type").isNull() | ~F.col("event_type").isin(config.ALLOWED_EVENT_TYPES),
+            F.lit("invalid_event_type"),
+          )
          .when(F.col("price").isNull() | (F.col("price") < 0), F.lit("invalid_or_negative_price"))
          .when(F.col("price") > config.MAX_PRICE, F.lit("price_exceeds_maximum"))
          .when(F.col("quantity").isNull() | (F.col("quantity") <= 0), F.lit("invalid_or_zero_quantity"))
