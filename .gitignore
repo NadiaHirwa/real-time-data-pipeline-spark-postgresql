@@ -28,4 +28,11 @@ spark-warehouse/
 logs/*
 !logs/.gitkeep
 
+# Personal planning/prep files - not committed documentation
 refresh_checklist.md
+project_2_ideas.md
+topic_index.md
+presentation_order.md
+requirement_traceability.md
+full_demo_script.md
+untested_rows_plan.md

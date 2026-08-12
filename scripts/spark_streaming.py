@@ -287,34 +287,34 @@ def archive_source_files(df: DataFrame) -> None:
 
 def process_batch(batch_df: DataFrame, batch_id: int, run_id: str) -> None:
     """Called once per micro-batch by foreachBatch()."""
-    cast_df = cast_and_normalize(batch_df)
-    tagged_df = tag_validation_result(cast_df)
-    valid_df, rejected_df = split_valid_and_rejected(tagged_df)
+    batch_df.persist()
+    try:
+        cast_df = cast_and_normalize(batch_df)
+        tagged_df = tag_validation_result(cast_df)
+        valid_df, rejected_df = split_valid_and_rejected(tagged_df)
 
-    valid_df.cache()
-    rejected_df.cache()
+        valid_df.cache()
+        rejected_df.cache()
 
-    valid_count = valid_df.count()
-    rejected_count = rejected_df.count()
-    logger.info("Batch %d: %d valid, %d rejected", batch_id, valid_count, rejected_count)
+        valid_count = valid_df.count()
+        rejected_count = rejected_df.count()
+        logger.info("Batch %d: %d valid, %d rejected", batch_id, valid_count, rejected_count)
 
-    if valid_count > 0:
-        write_valid_to_postgres(valid_df, config.JDBC_URL, run_id, batch_id)
-        merge_staging_to_events(run_id, batch_id)
-        logger.info("Batch %d: staged and merged %d valid rows into events", batch_id, valid_count)
+        if valid_count > 0:
+            write_valid_to_postgres(valid_df, config.JDBC_URL, run_id, batch_id)
+            merge_staging_to_events(run_id, batch_id)
+            logger.info("Batch %d: staged and merged %d valid rows into events", batch_id, valid_count)
 
-    if rejected_count > 0:
-        write_rejected_to_postgres(rejected_df, config.JDBC_URL)
-        logger.info("Batch %d: wrote %d rejected rows to rejected_events", batch_id, rejected_count)
+        if rejected_count > 0:
+            write_rejected_to_postgres(rejected_df, config.JDBC_URL)
+            logger.info("Batch %d: wrote %d rejected rows to rejected_events", batch_id, rejected_count)
 
-    # Archive only after both writes succeed - if either write above
-    # raised an exception, execution never reaches here, and the
-    # source files remain in incoming/ to be retried on the next
-    # trigger (or the next restart, via checkpoint recovery).
-    archive_source_files(batch_df)
+        archive_source_files(batch_df)
 
-    valid_df.unpersist()
-    rejected_df.unpersist()
+        valid_df.unpersist()
+        rejected_df.unpersist()
+    finally:
+        batch_df.unpersist()
 
 
 def run(spark: SparkSession) -> None:
