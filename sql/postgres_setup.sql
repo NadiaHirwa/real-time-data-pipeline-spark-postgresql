@@ -39,6 +39,13 @@ CREATE INDEX IF NOT EXISTS idx_events_ingested_at ON events (ingested_at);
 -- queryable, not just sitting as CSV files in data/rejected/.
 -- Deliberately has NO constraints on event_type/price/etc, since
 -- the entire point is to hold rows that violate those rules.
+--
+-- Every value column is TEXT because it stores the ORIGINAL string as
+-- received, not a typed value - a price of 'not_a_number' is exactly
+-- what an analyst needs to see, and could not be stored in a NUMERIC
+-- column at all. corrupt_record holds the raw CSV line for rows Spark
+-- could not structurally parse, which is the only diagnostic such a
+-- row has (see project_rejected_for_write() in spark_streaming.py).
 CREATE TABLE IF NOT EXISTS rejected_events (
     event_id         TEXT,
     user_id          TEXT,
@@ -48,9 +55,16 @@ CREATE TABLE IF NOT EXISTS rejected_events (
     quantity         TEXT,
     category         TEXT,
     event_timestamp  TEXT,
+    corrupt_record   TEXT,
     rejection_reason TEXT NOT NULL,
     rejected_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- Migration for any database created before corrupt_record existed:
+-- the CREATE TABLE IF NOT EXISTS above is a no-op on an already-present
+-- table and will NOT add the new column, so this runs separately. It is
+-- idempotent and safe to re-run on a fresh database too.
+ALTER TABLE rejected_events ADD COLUMN IF NOT EXISTS corrupt_record TEXT;
 
 -- Staging table for the bulk-write-then-merge upsert pattern used by
 -- write_valid_to_postgres() (see docs/engineering_decisions.md).

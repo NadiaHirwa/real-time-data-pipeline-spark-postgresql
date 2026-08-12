@@ -30,6 +30,13 @@ Checkpoint location:  checkpoint/ (configurable via CHECKPOINT_DIR)
 Trigger interval:     5 seconds (configurable via TRIGGER_INTERVAL_SECONDS;
                        found to be too aggressive for the tested write
                        pattern - see performance_metrics.md)
+Max files per trigger: 5 (configurable via MAX_FILES_PER_TRIGGER) - caps how
+                       many files one micro-batch consumes. Without it, the
+                       first batch after a backlog (a restart, a slow
+                       consumer, or files accumulating between triggers)
+                       reads every waiting file at once, risking a very slow
+                       or memory-heavy first batch; capping it spreads the
+                       backlog over several normal-sized batches
 Schema:               explicit (EVENT_SCHEMA in spark_streaming.py);
                        inference is not possible for a streaming file
                        source that hasn't seen all its data yet

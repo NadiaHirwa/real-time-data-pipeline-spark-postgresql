@@ -48,6 +48,16 @@ EVENT_SCHEMA = StructType([
 
 CORRUPT_RECORD_COLUMN = "_corrupt_record"
 
+# Columns whose try_cast() in cast_and_normalize() can turn a bad value
+# into NULL. Each is copied to raw_<name> before that cast runs, so the
+# original string survives all the way to rejected_events - otherwise an
+# analyst reviewing a rejected row sees only that a field failed, never
+# what the offending value actually was. event_id, event_type, and
+# category are absent deliberately: none of them is cast, so their
+# original text already survives (event_type is lowercased and trimmed,
+# which normalizes it but does not destroy it).
+RAW_PRESERVED_COLUMNS = ["user_id", "product_id", "price", "quantity", "event_timestamp"]
+
 
 def build_spark_session() -> SparkSession:
     """
@@ -79,12 +89,23 @@ def read_incoming_stream(spark: SparkSession) -> DataFrame:
     dropped or partially nulled - its raw text is captured in
     _corrupt_record, which tag_validation_result() checks first,
     before any of the normal field-level validation rules run.
+
+    maxFilesPerTrigger caps how many files a single micro-batch will
+    consume. Without it, the first batch after any backlog - a restart,
+    a slow consumer, or simply many files accumulating between triggers
+    - tries to read EVERY file waiting in data/incoming/ at once, which
+    risks a very slow or memory-heavy first batch. Capping it spreads a
+    backlog across several normal-sized batches instead. The value was
+    already defined in config.py (and documented in
+    performance_methodology.md as part of the test setup) but was never
+    actually applied to the stream until now.
     """
     return (
         spark.readStream
         .option("header", "true")
         .option("mode", "PERMISSIVE")
         .option("columnNameOfCorruptRecord", CORRUPT_RECORD_COLUMN)
+        .option("maxFilesPerTrigger", str(config.MAX_FILES_PER_TRIGGER))
         .schema(EVENT_SCHEMA)
         .csv(str(config.INCOMING_DIR))
         .withColumn("_source_file", F.input_file_name())
@@ -92,7 +113,27 @@ def read_incoming_stream(spark: SparkSession) -> DataFrame:
 
 
 def cast_and_normalize(df: DataFrame) -> DataFrame:
-    """Safely cast and normalize raw columns."""
+    """
+    Safely cast and normalize raw columns.
+
+    Every cast here is a try_cast(), so an unparseable value becomes
+    NULL instead of raising - Spark 4.x runs with ANSI mode ON by
+    default, where a plain cast() on bad input throws and would kill
+    the entire batch rather than letting validation reject the single
+    offending row.
+
+    That NULL is exactly what tag_validation_result() needs, but it
+    also destroys the evidence of what was actually received - which
+    is precisely what someone reading rejected_events needs to see. So
+    each column in RAW_PRESERVED_COLUMNS is copied to raw_<name> FIRST,
+    while it still holds the untouched source string (deliberately
+    un-trimmed, so even stray whitespace in the original is visible).
+    Validation continues to use only the typed columns; the raw_
+    copies are read in exactly one place, project_rejected_for_write().
+    """
+    for column in RAW_PRESERVED_COLUMNS:
+        df = df.withColumn(f"raw_{column}", F.col(column))
+
     return (
         df
         .withColumn("event_type", F.lower(F.trim(F.col("event_type"))))
@@ -239,17 +280,47 @@ def merge_staging_to_events(run_id: str, batch_id: int) -> None:
         conn.close()
 
 
+def project_rejected_for_write(rejected_df: DataFrame) -> DataFrame:
+    """
+    The exact set of columns written to rejected_events.
+
+    Each value column comes from its raw_ copy rather than the typed
+    one, so a row rejected for an unparseable price shows
+    "not_a_number" - what was actually received - instead of the NULL
+    that try_cast() replaced it with. Quarantine exists to show what
+    arrived; writing the post-cast NULL would throw away the single
+    most useful piece of information in the row.
+
+    corrupt_record carries Spark's captured raw CSV text. For a
+    malformed_csv_row rejection it is the ONLY diagnostic that exists,
+    since a row Spark could not structurally parse has no meaningful
+    field values at all - it was previously computed, carried through
+    validation, and then silently dropped at write time.
+
+    Split out from write_rejected_to_postgres() so tests can assert on
+    exactly what would be written without needing a live database.
+    """
+    return rejected_df.select(
+        F.col("event_id"),
+        F.col("raw_user_id").alias("user_id"),
+        F.col("raw_product_id").alias("product_id"),
+        F.col("event_type"),
+        F.col("raw_price").alias("price"),
+        F.col("raw_quantity").alias("quantity"),
+        F.col("category"),
+        F.col("raw_event_timestamp").alias("event_timestamp"),
+        F.col(CORRUPT_RECORD_COLUMN).alias("corrupt_record"),
+        F.col("rejection_reason"),
+    )
+
+
 def write_rejected_to_postgres(rejected_df: DataFrame, jdbc_url: str) -> None:
     """
     rejected_events has no unique constraint, so the standard Spark
     JDBC writer (simple append, no upsert needed) is safe here.
     """
     (
-        rejected_df
-        .select(
-            "event_id", "user_id", "product_id", "event_type",
-            "price", "quantity", "category", "event_timestamp", "rejection_reason",
-        )
+        project_rejected_for_write(rejected_df)
         .write
         .format("jdbc")
         .option("url", jdbc_url)

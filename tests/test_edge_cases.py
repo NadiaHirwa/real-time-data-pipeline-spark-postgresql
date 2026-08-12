@@ -23,6 +23,7 @@ from spark_streaming import (
     cast_and_normalize,
     tag_validation_result,
     split_valid_and_rejected,
+    project_rejected_for_write,
 )
 
 
@@ -176,3 +177,85 @@ def test_null_event_id_is_rejected_not_silently_accepted(spark):
         "column."
     )
     assert result["rejection_reason"] == "invalid_event_id_format"
+
+
+def test_rejected_row_preserves_original_value_that_failed_to_cast(spark):
+    """
+    Diagnostic-quality gap found by comparing against a peer
+    implementation. cast_and_normalize() try_casts each numeric field,
+    so an unparseable value becomes NULL - correct for validation, but
+    it used to mean rejected_events recorded only that price failed,
+    never that the offending value was "not_a_number". An analyst
+    reviewing quarantine could see the verdict but not the evidence.
+
+    This asserts against project_rejected_for_write(), the actual
+    projection write_rejected_to_postgres() sends to the database, so
+    it tests what really gets stored rather than a re-implementation
+    of it. Every field here is deliberately valid except price, so the
+    row is rejected for exactly one reason.
+    """
+    row = Row(
+        event_id=str(uuid.uuid4()), user_id="123", product_id="456",
+        event_type="view", price="not_a_number", quantity="1", category="Books",
+        event_timestamp="2026-01-01 12:00:00", _corrupt_record=None,
+    )
+    df = spark.createDataFrame([row], schema=EVENT_SCHEMA)
+
+    tagged = tag_validation_result(cast_and_normalize(df))
+    _, rejected_df = split_valid_and_rejected(tagged)
+
+    # The typed column is still NULL - validation depends on that, and
+    # this test must not accidentally "fix" it by weakening the cast.
+    assert rejected_df.collect()[0]["price"] is None
+
+    written = project_rejected_for_write(rejected_df).collect()[0]
+
+    assert written["price"] == "not_a_number", (
+        f"rejected_events would record price={written['price']!r} instead of "
+        "the original 'not_a_number' - the value that caused the rejection "
+        "is exactly what quarantine needs to preserve."
+    )
+    assert written["rejection_reason"] == "invalid_or_negative_price"
+    # Fields that cast cleanly still round-trip their original text.
+    assert written["user_id"] == "123"
+    assert written["quantity"] == "1"
+
+
+def test_malformed_row_preserves_raw_csv_text_in_corrupt_record(spark, tmp_path):
+    """
+    Companion to the test above, for the one rejection type that has
+    no usable field values at all. A structurally broken CSV row is
+    tagged malformed_csv_row, and every parsed column is null - so the
+    raw text Spark captured in _corrupt_record is the ONLY evidence of
+    what arrived. It was computed and carried through validation, then
+    silently dropped at write time because write_rejected_to_postgres()
+    never selected it.
+    """
+    csv_path = tmp_path / "malformed.csv"
+    csv_path.write_text(
+        "event_id,user_id,product_id,event_type,price,category,event_timestamp\n"
+        "eeee8888-8888-8888-8888-888888888888,555,666,view,39.99,Sports,2026-01-01 12:00:00\n",
+        encoding="utf-8",
+    )
+
+    df = (
+        spark.read
+        .option("header", "true")
+        .option("mode", "PERMISSIVE")
+        .option("columnNameOfCorruptRecord", "_corrupt_record")
+        .schema(EVENT_SCHEMA)
+        .csv(str(csv_path))
+    )
+
+    tagged = tag_validation_result(cast_and_normalize(df))
+    _, rejected_df = split_valid_and_rejected(tagged)
+    written = project_rejected_for_write(rejected_df).collect()[0]
+
+    assert written["rejection_reason"] == "malformed_csv_row"
+    assert written["corrupt_record"] is not None, (
+        "A malformed_csv_row rejection reached rejected_events with no "
+        "corrupt_record text - the only diagnostic such a row has."
+    )
+    # The captured text must be the actual offending line, not a placeholder.
+    assert "eeee8888-8888-8888-8888-888888888888" in written["corrupt_record"]
+    assert "39.99" in written["corrupt_record"]

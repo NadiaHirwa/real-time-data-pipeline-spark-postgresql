@@ -28,6 +28,10 @@ CREATE INDEX IF NOT EXISTS idx_events_user_id ON events (user_id);
 CREATE INDEX IF NOT EXISTS idx_events_product_id ON events (product_id);
 CREATE INDEX IF NOT EXISTS idx_events_ingested_at ON events (ingested_at);
 
+-- Value columns are TEXT because they store the ORIGINAL string as
+-- received, not a typed value; corrupt_record holds the raw CSV line
+-- for rows Spark could not structurally parse. Kept identical to
+-- postgres_setup.sql - see that file for the fuller explanation.
 CREATE TABLE IF NOT EXISTS rejected_events (
     event_id         TEXT,
     user_id          TEXT,
@@ -37,9 +41,12 @@ CREATE TABLE IF NOT EXISTS rejected_events (
     quantity         TEXT,
     category         TEXT,
     event_timestamp  TEXT,
+    corrupt_record   TEXT,
     rejection_reason TEXT NOT NULL,
     rejected_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE rejected_events ADD COLUMN IF NOT EXISTS corrupt_record TEXT;
 
 CREATE TABLE IF NOT EXISTS staging_events (
     run_id           TEXT NOT NULL,

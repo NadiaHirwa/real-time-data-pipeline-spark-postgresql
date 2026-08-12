@@ -2,6 +2,8 @@
 
 See [`performance_methodology.md`](performance_methodology.md) for exactly how these numbers were measured.
 
+> **Note on the benchmark configuration:** both runs below predate `MAX_FILES_PER_TRIGGER` being wired into the pipeline. The setting existed in `config.py` and was documented as part of the test setup, but was never actually applied to the stream, so these runs were uncapped. Observed batch sizes stayed within 20-60 rows (1-3 files at 20 events per file), well under the 5-file cap, so the latency and throughput figures here are very likely unaffected - but the documented setup did not match what executed, and that is disclosed rather than left implicit. See `performance_methodology.md` for the fuller note.
+
 ## Test Run Summary
 
 | Metric | Value |

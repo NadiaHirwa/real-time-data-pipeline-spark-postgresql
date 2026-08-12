@@ -23,6 +23,10 @@ Test plan:
 
 This produces a controlled, bounded run (40 files, 800 events total) rather than an open-ended stream, so start and end times are well-defined and the test is reproducible.
 
+**Disclosure about `MAX_FILES_PER_TRIGGER = 5` above:** this benchmark was actually run BEFORE that setting was wired into the pipeline. The value existed in `config.py` and `.env.example` at the time, and was listed here as part of the test setup, but `read_incoming_stream()` never passed it to Spark as a `maxFilesPerTrigger` option - it was dead configuration, so the run was in fact uncapped. It has since been connected (see `architecture.md`'s Spark Configuration section).
+
+In practice this very likely did not affect the recorded numbers: the batch sizes observed during the run ranged from 20 to 60 rows (see `performance_metrics.md`'s trigger-interval section), and at 20 events per file that is 1-3 files per batch - comfortably under the 5-file cap, which therefore would never have bound even if it had been active. The numbers are reported as measured rather than re-run. This is disclosed as a shortfall in the benchmark's rigor - the documented configuration did not match the executed configuration - not as a known error in the results.
+
 ## What Was Measured, and How
 
 **Generator phase duration**: timestamp of the first "Wrote N events" log line to the timestamp of the last, both emitted by `data_generator.py`'s own logger.
