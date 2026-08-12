@@ -144,3 +144,35 @@ def test_null_event_type_is_rejected_not_silently_accepted(spark):
         "incorrectly treated as valid."
     )
     assert result["rejection_reason"] == "invalid_event_type"
+
+
+def test_null_event_id_is_rejected_not_silently_accepted(spark):
+    """
+    A second instance of the same bug class as
+    test_null_event_type_is_rejected_not_silently_accepted, found by
+    checking every other .when() condition in tag_validation_result()
+    for the same pattern. F.col("event_id").rlike(pattern) follows
+    the same three-valued logic as isin(): NULL.rlike(...) evaluates
+    to NULL, not False, so ~NULL is still NULL and the .when()
+    condition never fires. Since no OTHER check in this function
+    tests event_id's nullness, a row with event_id=None could fall
+    through every single check and be marked VALID - on the PRIMARY
+    KEY column, which is more severe than the event_type instance of
+    this same bug.
+    """
+    row = Row(
+        event_id=None, user_id="123", product_id="456",
+        event_type="view", price="19.99", quantity="1", category="Books",
+        event_timestamp="2026-01-01 12:00:00", _corrupt_record=None,
+    )
+    df = spark.createDataFrame([row], schema=EVENT_SCHEMA)
+
+    tagged = tag_validation_result(cast_and_normalize(df))
+    result = tagged.collect()[0]
+
+    assert result["rejection_reason"] is not None, (
+        "A row with event_id=None was NOT rejected - the same null-unsafe "
+        "rlike() pattern as the event_type bug, but on the PRIMARY KEY "
+        "column."
+    )
+    assert result["rejection_reason"] == "invalid_event_id_format"

@@ -110,7 +110,10 @@ def tag_validation_result(df: DataFrame) -> DataFrame:
     return df.withColumn(
         "rejection_reason",
         F.when(F.col(CORRUPT_RECORD_COLUMN).isNotNull(), F.lit("malformed_csv_row"))
-         .when(~F.col("event_id").rlike(config.UUID_PATTERN), F.lit("invalid_event_id_format"))
+         .when(
+            F.col("event_id").isNull() | ~F.col("event_id").rlike(config.UUID_PATTERN),
+            F.lit("invalid_event_id_format"),
+        )
          .when(F.col("user_id").isNull(), F.lit("missing_or_invalid_user_id"))
          .when(F.col("product_id").isNull(), F.lit("missing_or_invalid_product_id"))
          .when(
