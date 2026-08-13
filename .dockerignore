@@ -1,0 +1,42 @@
+# Keeps the build context small and, more importantly, keeps secrets
+# and machine-specific state out of the image.
+
+# Credentials - passed in at RUN time by docker-compose's env_file
+# instead, so they never get baked into an image layer.
+.env
+
+# Version control and CI
+.git/
+.gitignore
+.github/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Runtime state - all of this is generated, and data/ and checkpoint/
+# are mounted from the host or a named volume at run time anyway.
+# Baking a stale checkpoint into the image would be actively harmful:
+# Spark would resume from another machine's file-tracking state.
+data/incoming/*
+data/processed_archive/*
+data/rejected/*
+checkpoint/
+logs/
+*.log
+
+# Documentation and planning files - not needed to run anything
+docs/
+diagrams/
+*.md
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

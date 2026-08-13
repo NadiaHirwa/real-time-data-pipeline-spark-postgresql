@@ -1,0 +1,155 @@
+# docker-compose.yml
+#
+# A fully containerized way to run this project: PostgreSQL and the
+# Spark/Python application, with no manual Java, Spark, or PostgreSQL
+# installation on the host.
+#
+# This is an ADDITIONAL way to run the pipeline, not a replacement.
+# The native Windows setup in docs/user_guide.md is unchanged and
+# still works; the two differ in exactly one behavioural way, called
+# out on the app service below (DB_HOST).
+#
+#   docker compose up -d
+#   docker compose exec app python main.py status
+#   docker compose exec app python main.py stream
+#
+# Connection settings are interpolated from the same ./.env this
+# project already uses natively (see .env.example). The :-defaults
+# keep a fresh clone working before anyone has written a .env at all.
+
+services:
+  postgres:
+    # Pinned to 16, NOT latest and NOT 18: postgres:18 moved its
+    # default PGDATA path, which silently breaks a volume mount made
+    # against the old location - the database appears to work, then
+    # loses everything on the next container recreate. alpine for a
+    # substantially smaller image.
+    image: postgres:16-alpine
+    container_name: ecommerce_postgres
+    environment:
+      # This project's .env uses DB_* names; the postgres image expects
+      # POSTGRES_* names. Mapped here rather than duplicating the values
+      # into a second env file that could drift out of sync.
+      POSTGRES_DB: ${DB_NAME:-ecommerce_events}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      # Published to the host so pgAdmin (used throughout this
+      # project's development) can still connect for manual inspection,
+      # exactly as it does against a native install.
+      #
+      # The HOST side is overridable because this project's whole point
+      # is that a native PostgreSQL may already be installed - and if it
+      # is, it already owns 5432, so publishing there fails with "port
+      # is already allocated". On a clean machine (the case this whole
+      # compose file exists for) the default is plain 5432; to run
+      # alongside a native install, set POSTGRES_HOST_PORT=5433 in .env
+      # and point pgAdmin at localhost:5433. The CONTAINER side is
+      # always 5432, so DB_PORT for the app service never changes.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      # A NAMED volume, not a bind mount: PostgreSQL's data directory
+      # needs POSIX ownership and permissions that a Windows bind mount
+      # cannot represent correctly.
+      - postgres_data:/var/lib/postgresql/data
+      # Schema bootstrap, applied automatically on FIRST creation of
+      # the volume above.
+      #
+      # This mounts one specific file rather than the whole sql/
+      # directory, which would not work: everything in
+      # /docker-entrypoint-initdb.d runs alphabetically, so
+      # postgres_setup.sql would run first and fail immediately on its
+      # `CREATE DATABASE ecommerce_events;` line - the database already
+      # exists by then, created from POSTGRES_DB above. The entrypoint
+      # runs psql with ON_ERROR_STOP=1, so that single error aborts
+      # initialization and leaves an empty database.
+      #
+      # postgres_setup_ci.sql is the right file here: it exists because
+      # GitHub Actions' service container hits this identical situation
+      # (database pre-created from an env var), so it omits only the
+      # CREATE DATABASE line while creating exactly the same objects -
+      # all four tables, every index, and all three views.
+      - ./sql/postgres_setup_ci.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      # pg_isready, not a plain TCP check: the port accepts connections
+      # noticeably before the server is actually ready to serve queries,
+      # and during first-run initdb the server restarts partway through.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ecommerce_events}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      # Covers first boot, when the init script above has to run before
+      # the server starts accepting real connections.
+      start_period: 20s
+
+  app:
+    build: .
+    container_name: ecommerce_app
+    depends_on:
+      postgres:
+        # condition: service_healthy, not a bare depends_on. A bare
+        # depends_on waits only for the container to START, which for
+        # Postgres happens well before it accepts connections - the app
+        # would connect too early and crash on first run.
+        condition: service_healthy
+    env_file:
+      # Reuses the project's existing .env for the tuning knobs
+      # (MAX_FILES_PER_TRIGGER, TRIGGER_INTERVAL_SECONDS, generator
+      # settings). required: false so a fresh clone without a .env
+      # still starts, falling back to config.py's defaults.
+      - path: .env
+        required: false
+    environment:
+      # THE key difference from the native setup. Containers reach each
+      # other by SERVICE NAME on the compose network, so the database is
+      # at "postgres" here, not "localhost". config.py already reads
+      # DB_HOST via os.getenv, and python-dotenv does not override
+      # variables that are already set in the environment, so this wins
+      # over any DB_HOST=localhost inside a mounted .env.
+      DB_HOST: postgres
+      # Always the container-internal port, even if the host maps
+      # Postgres somewhere else or .env says otherwise.
+      DB_PORT: 5432
+      # Interpolated from the same .env the postgres service reads, so
+      # the two can never disagree about credentials.
+      DB_NAME: ${DB_NAME:-ecommerce_events}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      # Bind mount, deliberately: CSVs written by host-side scripts must
+      # be visible to the container, and archived files must be
+      # inspectable from the host. This is the shared working surface
+      # between the two ways of running the project.
+      - ./data:/app/data
+      # NAMED volume, deliberately: Structured Streaming's checkpointing
+      # relies on atomic rename semantics that Windows bind mounts do
+      # not reliably honour. The failure mode is rare, silent checkpoint
+      # corruption, so this one stays inside Docker's own filesystem.
+      - spark_checkpoint:/app/checkpoint
+    # No command here: the image's CMD keeps the container idle so the
+    # stream and generator can be started on demand, matching how
+    # main.py's subcommands are already used in separate terminals.
+
+  adminer:
+    # Browser-based SQL client at http://localhost:8080 - a lightweight
+    # alternative to pgAdmin for quick inspection, so nothing needs to
+    # be installed on the host to look at the data.
+    image: adminer:latest
+    container_name: ecommerce_adminer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Overridable for the same reason as Postgres above: 8080 is a
+      # popular port and may already be taken on the host. Set
+      # ADMINER_HOST_PORT in .env to move it.
+      - "${ADMINER_HOST_PORT:-8080}:8080"
+    environment:
+      # ADMINER_DEFAULT_SERVER, which pre-fills the server field with
+      # the compose service name. Note it is NOT ADMINER_DEFAULT_DRIVER:
+      # that variable is silently ignored by this image.
+      ADMINER_DEFAULT_SERVER: postgres
+
+volumes:
+  postgres_data:
+  spark_checkpoint:

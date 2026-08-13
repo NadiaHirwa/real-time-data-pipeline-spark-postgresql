@@ -20,18 +20,28 @@ configured fixture here fixes this permanently, regardless of file
 naming or execution order.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 from pyspark.sql import SparkSession
+
+sys.path.append(str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from spark_streaming import with_postgres_driver
 
 
 @pytest.fixture(scope="session")
 def spark():
-    session = (
+    # The driver is attached by the same helper the streaming job uses,
+    # rather than hardcoding spark.jars.packages here. That keeps this
+    # fixture correct in both environments: Maven natively, and the
+    # jar baked into the Docker image when running inside a container
+    # (where a Maven fetch would need network access on every run).
+    session = with_postgres_driver(
         SparkSession.builder
         .appName("TestSuite")
         .master("local[1]")
-        .config("spark.jars.packages", "org.postgresql:postgresql:42.7.3")
-        .getOrCreate()
-    )
+    ).getOrCreate()
     yield session
     session.stop()

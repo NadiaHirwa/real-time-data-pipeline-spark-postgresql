@@ -21,6 +21,8 @@ writer directly.
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -59,23 +61,45 @@ CORRUPT_RECORD_COLUMN = "_corrupt_record"
 RAW_PRESERVED_COLUMNS = ["user_id", "product_id", "price", "quantity", "event_timestamp"]
 
 
+POSTGRES_JDBC_COORDINATES = "org.postgresql:postgresql:42.7.3"
+
+
+def with_postgres_driver(builder):
+    """
+    Attach the PostgreSQL JDBC driver to a SparkSession builder.
+
+    There are two supported ways in, selected by configuration rather
+    than by a "am I in Docker?" check, so neither environment has to
+    know about the other:
+
+    - Native and CI: POSTGRES_JDBC_JAR is unset, so Spark fetches the
+      driver from Maven via spark.jars.packages and caches it. This is
+      the original behaviour, unchanged. It deliberately does NOT
+      hardcode a local path - an earlier version pointed at
+      file:///C:/spark-jars/..., which exists on exactly one machine.
+
+    - Docker: the image downloads this same driver at BUILD time and
+      points POSTGRES_JDBC_JAR at it, so starting a container needs no
+      Maven round-trip - deterministic, works offline, and faster.
+
+    Both paths must use the same driver version: POSTGRES_JDBC_COORDINATES
+    here and the ADD line in the Dockerfile.
+
+    Shared with tests/conftest.py, so the test suite resolves the
+    driver the same way in both environments.
+    """
+    if config.POSTGRES_JDBC_JAR:
+        return builder.config("spark.jars", config.POSTGRES_JDBC_JAR)
+    return builder.config("spark.jars.packages", POSTGRES_JDBC_COORDINATES)
+
+
 def build_spark_session() -> SparkSession:
-    """
-    Create the SparkSession, wiring in the PostgreSQL JDBC driver via
-    Maven coordinates rather than a manually-downloaded local .jar
-    file. The original version hardcoded a Windows-specific path
-    (file:///C:/spark-jars/...), which does not exist on Linux CI
-    runners or any other machine - spark.jars.packages tells Spark to
-    fetch (and cache) the driver from Maven automatically, working
-    identically across Windows, Linux, and CI.
-    """
-    return (
+    """Create the SparkSession used by the streaming job."""
+    return with_postgres_driver(
         SparkSession.builder
         .appName("EcommerceEventStreaming")
         .master("local[*]")
-        .config("spark.jars.packages", "org.postgresql:postgresql:42.7.3")
-        .getOrCreate()
-    )
+    ).getOrCreate()
 
 
 def read_incoming_stream(spark: SparkSession) -> DataFrame:
@@ -333,6 +357,36 @@ def write_rejected_to_postgres(rejected_df: DataFrame, jdbc_url: str) -> None:
     )
 
 
+def source_uri_to_path(file_uri: str) -> Path:
+    """
+    Convert one input_file_name() URI into a real filesystem path.
+
+    This has to be done properly rather than by stripping the "file:///"
+    prefix as a string, which is a silent, platform-specific bug:
+
+    - On Windows the URI is file:///C:/Users/.../events.csv, and
+      stripping the prefix leaves C:/Users/.../events.csv - still
+      absolute, so it happens to work.
+    - On Linux (every container) the URI is file:///app/data/events.csv,
+      and stripping the same prefix eats the LEADING SLASH, leaving the
+      relative path app/data/events.csv. That never matches an existing
+      file, so the exists() check below quietly fails and NOTHING is
+      archived - no error, no log line, just data/incoming/ growing
+      forever. Found by running this pipeline in Docker for the first
+      time; the native Windows setup was never affected.
+
+    urlparse + url2pathname is correct on both platforms, and also
+    decodes percent-escapes (a directory containing a space arrives
+    from Spark as %20, which the old string-strip left mangled).
+    """
+    if file_uri.startswith("file:"):
+        return Path(url2pathname(urlparse(file_uri).path))
+    # Spark can hand back a bare path rather than a URI; note this
+    # cannot go through urlparse, which reads the "C:" in a Windows
+    # path as a URL scheme.
+    return Path(file_uri)
+
+
 def archive_source_files(df: DataFrame) -> None:
     """
     Move every source CSV referenced in this batch from data/incoming/ to
@@ -349,7 +403,7 @@ def archive_source_files(df: DataFrame) -> None:
     """
     source_files = [row["_source_file"] for row in df.select("_source_file").distinct().collect()]
     for file_uri in source_files:
-        file_path = Path(file_uri.replace("file:///", "").replace("file:", ""))
+        file_path = source_uri_to_path(file_uri)
         if file_path.exists():
             destination = config.ARCHIVE_DIR / file_path.name
             file_path.rename(destination)

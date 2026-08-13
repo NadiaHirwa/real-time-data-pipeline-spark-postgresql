@@ -41,6 +41,14 @@ REJECTED_DIR = _get_path("REJECTED_DIR", "data/rejected")
 CHECKPOINT_DIR = _get_path("CHECKPOINT_DIR", "checkpoint")
 LOG_DIR = _get_path("LOG_DIR", "logs")
 
+# --- Spark runtime ---
+# Path to a pre-downloaded PostgreSQL JDBC driver .jar. Empty on the
+# native setup, where the driver is fetched from Maven at session start
+# instead. The Docker image bakes the driver in at build time and sets
+# this, so containers need no Maven round-trip on every start. See
+# with_postgres_driver() in spark_streaming.py.
+POSTGRES_JDBC_JAR = os.getenv("POSTGRES_JDBC_JAR", "")
+
 # --- Spark streaming tuning ---
 MAX_FILES_PER_TRIGGER = int(os.getenv("MAX_FILES_PER_TRIGGER", "5"))
 TRIGGER_INTERVAL_SECONDS = int(os.getenv("TRIGGER_INTERVAL_SECONDS", "5"))
