@@ -40,11 +40,37 @@ Max files per trigger: 5 (configurable via MAX_FILES_PER_TRIGGER) - caps how
 Schema:               explicit (EVENT_SCHEMA in spark_streaming.py);
                        inference is not possible for a streaming file
                        source that hasn't seen all its data yet
-JDBC driver:           PostgreSQL JDBC 42.7.3, loaded via spark.jars.packages
-                       (Maven coordinates, not a manually-downloaded local
-                       .jar - see engineering_decisions.md; this also
-                       makes the same code work unchanged in CI, on Linux)
+JDBC driver:           PostgreSQL JDBC 42.7.3, loaded one of two ways
+                       depending on environment - see "Runtime
+                       Environments" below. Natively and in CI it comes
+                       from spark.jars.packages (Maven coordinates, not a
+                       manually-downloaded local .jar - see
+                       engineering_decisions.md); in Docker it is baked
+                       into the image at build time
 ```
+
+## Runtime Environments: Native and Dockerized
+
+The project runs in either of two environments, and both execute the same application code - there is no Docker-specific branch of the pipeline, and no file that exists only for one path.
+
+| | Native | Dockerized |
+|---|---|---|
+| Host requirements | Python, Java 17, Spark, PostgreSQL, JDBC .jar | Docker Desktop only |
+| Components | Processes on the host | `postgres`, `app`, and `adminer` containers on a compose network |
+| Database host | `localhost` | `postgres` (the compose service name) |
+| JDBC driver | Resolved from Maven at session start | Baked into the image at build time |
+| Status | How the project was developed and benchmarked | An additional, equivalent way to run it |
+
+Exactly two things differ between the environments from the application's point of view, and both are handled by configuration rather than by conditional code.
+
+**1. The JDBC driver, loaded by one of two paths.** `with_postgres_driver()` in `spark_streaming.py` attaches the driver to a SparkSession builder, and every caller - the streaming job and the pytest fixture in `tests/conftest.py` - goes through it:
+
+- If `POSTGRES_JDBC_JAR` is set (the Docker image sets it to the jar it downloaded during build), it configures `spark.jars` with that local path. No Maven round-trip on container start: deterministic, works offline, and measurably faster.
+- If it is unset (native and CI), it configures `spark.jars.packages` with the Maven coordinates, exactly as before.
+
+The selection is driven by the *presence of one environment variable*, not by detecting Docker. That is the point: adding the containerized path required no change to how the native path resolves its driver, and a future third environment would need no new branch either. The single constraint is that the version in `POSTGRES_JDBC_COORDINATES` and the version the Dockerfile downloads must stay in sync; both are 42.7.3, and each is commented pointing at the other.
+
+**2. `DB_HOST`, which is genuinely environment-specific.** Containers reach each other by service name on the compose network, so the database is at `postgres` inside Docker and `localhost` natively. This is the main environment difference application code has to get right, and it works because `config.py` reads `DB_HOST` via `os.getenv()` rather than hardcoding it: `docker-compose.yml` sets `DB_HOST: postgres` for the app service, and python-dotenv does not override variables already present in the environment, so the container's value wins over the `DB_HOST=localhost` in a mounted `.env`. The same `.env` therefore serves both paths without edits.
 
 ## PostgreSQL Configuration
 

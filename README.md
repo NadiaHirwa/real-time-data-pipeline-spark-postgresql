@@ -12,6 +12,9 @@ real-time-data-pipeline-spark-postgresql/
 ├── requirements.txt
 ├── .env.example
 ├── postgres_connection_details.txt
+├── docker-compose.yml               # Postgres + app + Adminer (optional Docker path)
+├── Dockerfile                       # Python + Java 17 + PySpark image for the app
+├── .dockerignore                    # Keeps secrets and runtime state out of the image
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                   # Runs the full test suite on every push
@@ -80,6 +83,9 @@ real-time-data-pipeline-spark-postgresql/
 | [`sql/postgres_setup_ci.sql`](sql/postgres_setup_ci.sql) | CI-specific schema (omits CREATE DATABASE, since the CI Postgres container creates it automatically) |
 | [`main.py`](main.py) | CLI dispatcher (generator / stream / verify / test / clean / status) |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs the full 27-test suite against a real PostgreSQL service container on every push |
+| [`docker-compose.yml`](docker-compose.yml) | Optional fully containerized environment: PostgreSQL, the Spark/Python app, and Adminer, wired together with a healthcheck gate and named volumes |
+| [`Dockerfile`](Dockerfile) | Image for the Spark/Python side - Python 3.13 plus Java 17 and PySpark, with the PostgreSQL JDBC driver baked in at build time |
+| [`.dockerignore`](.dockerignore) | Keeps credentials (.env) and machine-specific runtime state (checkpoint, logs, generated CSVs) out of the built image |
 | [`tests/test_spark_streaming.py`](tests/test_spark_streaming.py) | 13 tests covering every data contract validation rule |
 | [`tests/test_integration.py`](tests/test_integration.py) | 3 tests exercising the real staging+merge write path against a live PostgreSQL |
 | [`tests/test_errors.py`](tests/test_errors.py) | 11 tests covering the error classification logic, including a drift-guard against the inlined worker-side copy |
@@ -105,6 +111,15 @@ real-time-data-pipeline-spark-postgresql/
 | [`docs/retention_policy.md`](docs/retention_policy.md) | How long each category of data is kept |
 | [`diagrams/`](diagrams/) | Architecture, sequence, and state diagrams (PNG) |
 | `v_rejection_summary`, `v_batch_performance`, `v_pipeline_health` | SQL views (in sql/postgres_setup.sql) backing the data quality and performance reports with reusable queries, rather than one-off hand-typed SQL |
+
+## Two Ways to Run This
+
+This project can be run either way, using the same application code:
+
+- **Natively** (how it was developed and benchmarked): Python, Java 17, Spark, and PostgreSQL installed on the host - the Quick Start below.
+- **Via Docker Compose**: PostgreSQL, the Spark/Python app, and Adminer all in containers, needing nothing installed on the host but Docker Desktop - no manual Java, Spark, or PostgreSQL setup at all.
+
+Full step-by-step instructions for both paths are in [`docs/user_guide.md`](docs/user_guide.md).
 
 ## Quick Start
 

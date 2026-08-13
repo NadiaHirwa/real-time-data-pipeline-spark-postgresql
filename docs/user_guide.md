@@ -2,6 +2,8 @@
 
 Step-by-step instructions to set up and run this project from a fresh clone.
 
+There are two ways to run this project, using the same application code. The native setup below is how the project was developed and benchmarked. If you would rather install nothing but Docker Desktop, skip ahead to [Running via Docker](#running-via-docker) - none of the prerequisites in the next section apply to that path.
+
 ## Prerequisites
 
 - Python 3.13 (or compatible)
@@ -71,6 +73,120 @@ Removes generated/archived CSV files and clears the Spark checkpoint. This does 
    python main.py status
 
 Reports whether required directories exist, whether the database connection works, the current events row count, and how many files are currently pending in data/incoming/.
+
+## Running via Docker
+
+A fully containerized alternative to everything above: PostgreSQL, the Spark/Python application, and Adminer all run in containers. This is an ADDITIONAL way to run the project, not a replacement - the native setup above is unchanged and still works, and both use the same application code.
+
+### Prerequisites
+
+Docker Desktop, installed and running. That is the entire list. No Python, Java, Spark, PostgreSQL, JDBC driver, or winutils.exe is needed on the host for this path - the image contains all of it.
+
+### Setup
+
+1. Copy .env.example to .env and fill in your credentials, if you have not already:
+   cp .env.example .env
+
+   This is the same .env the native setup uses; the two paths share it. Leave DB_HOST=localhost as-is - docker-compose.yml overrides it to `postgres` for the app container automatically (see docs/architecture.md for why).
+
+2. Build the application image:
+   docker compose build
+
+   The first build takes several minutes, mostly downloading PySpark. Later builds reuse the cached dependency layer and take seconds unless requirements.txt changed.
+
+3. Start PostgreSQL and wait for it to report healthy:
+   docker compose up -d postgres
+   docker compose ps
+
+   Wait until STATUS shows `Up (healthy)`, not just `Up`. On first start the container also creates the schema automatically by running sql/postgres_setup_ci.sql - all four tables, the indexes, and the three views.
+
+4. Start the rest of the stack and confirm the app can reach the database:
+   docker compose up -d
+   docker compose exec app python main.py status
+
+   This should report all directories as [OK] and the database connection as OK, exactly as the native path does.
+
+### Running the Pipeline
+
+Same producer/consumer split as the native setup, just wrapped in `docker compose exec`.
+
+Terminal 1 - start the consumer:
+   docker compose exec app python main.py stream
+
+Terminal 2 - start the producer:
+   docker compose exec app python main.py generator
+
+For a bounded number of files instead of indefinitely:
+   docker compose exec app python -c "import sys; sys.path.append('scripts'); from data_generator import run; run(max_iterations=10)"
+
+Generated and archived CSV files are visible on the host under data/, since that directory is bind-mounted into the container - so you can inspect them normally while the pipeline runs.
+
+### Verifying Results
+
+   docker compose exec app python main.py verify
+
+### Running Tests
+
+   docker compose exec app python main.py test
+
+All 34 tests run inside the container, including the three integration tests against the containerized PostgreSQL. They run noticeably faster than natively, because the JDBC driver is already baked into the image and needs no Maven resolution.
+
+### Stopping the Stream Cleanly - Read This One
+
+**Ctrl+C on a `docker compose exec` session does NOT stop the process inside the container.** It detaches your terminal from it; the streaming job keeps running. This is not hypothetical - it was hit during testing of this setup, and the symptom is confusing: the next `docker compose exec app python main.py stream` fails with
+
+   Concurrent update to the log. Multiple streaming jobs detected
+
+which reads like a checkpoint corruption problem but actually means the first stream is still alive and holding the checkpoint.
+
+Stop it from inside the container instead:
+
+   docker compose exec app pkill -f "main[.]py str[e]am"
+
+The bracketed characters are deliberate. A plain `pkill -f "main.py stream"` matches the command line of the shell running the pkill itself, so it kills its own session before the target - the brackets make the pattern not match itself while still matching the real process.
+
+To confirm nothing is left running:
+
+   docker compose exec app ps -eo pid,args | grep "main[.]py str[e]am"
+
+No output means the stream is stopped and it is safe to start a new one. The same applies before running `python main.py clean` in a container - see the warning in "Resetting for a Fresh Test" above, which applies identically here.
+
+### Browsing the Database with Adminer
+
+Adminer is a lightweight browser-based SQL client, included as an alternative to pgAdmin so nothing needs installing on the host. Browse to:
+
+   http://localhost:8080
+
+(or whichever port ADMINER_HOST_PORT is set to - see below). The server field is pre-filled with `postgres`; log in with the DB_USER, DB_PASSWORD, and DB_NAME values from your .env.
+
+pgAdmin still works too - point it at localhost and the published Postgres port.
+
+### Port Conflicts
+
+If port 5432 or 8080 is already in use on the host - a natively-installed PostgreSQL already occupies 5432, and another project's Adminer may already occupy 8080 - `docker compose up` fails with a "port is already allocated" error.
+
+Fix it by setting either or both of these in .env:
+
+   POSTGRES_HOST_PORT=5433
+   ADMINER_HOST_PORT=8081
+
+Only the HOST side of the mapping changes. The container-internal ports are always 5432 and 8080, so nothing inside the compose network is affected and no other setting needs updating. Remember to point pgAdmin (and Adminer's URL) at the new port.
+
+### Resetting and Data Persistence
+
+   docker compose down
+
+This removes the containers and the network but deliberately KEEPS the named volumes, `postgres_data` and `spark_checkpoint`. Database rows and the Spark checkpoint therefore survive a full down/up cycle - `docker compose up -d` afterwards comes back with all previous data intact, and the schema init script does not re-run (it only runs when the data volume is empty).
+
+To wipe everything, including all stored rows and the checkpoint:
+
+   docker compose down -v
+
+The `-v` deletes the named volumes. This is irreversible: the next `up` starts from a completely empty database and re-runs the schema init script from scratch. Use it when you genuinely want a clean slate, not as a routine stop command.
+
+For a lighter reset that clears generated CSVs and the checkpoint but leaves database rows alone, the normal clean command works inside the container too (stop the stream first, as described above):
+
+   docker compose exec app python main.py clean
 
 ## Troubleshooting
 
