@@ -56,17 +56,39 @@ Prints total event counts, rejection counts, constraint violation checks, duplic
 
    python main.py test
 
+Runs the entire suite, including the integration tests that need a live PostgreSQL connection.
+
+For a fast sanity check that needs no database at all, run pytest directly instead (not through main.py):
+
+   pytest -m "not integration"
+
+That skips the tests in tests/test_integration.py, which are the only ones requiring a real database. Useful while iterating on validation logic, or on a machine where Postgres is not running. `python main.py test` is unchanged and still runs everything.
+
 ## Resetting for a Fresh Test
 
-**Important: only run this while the streaming job is stopped.** Running `python main.py clean` while `python main.py stream` is still active deletes the checkpoint directory out from under a live, running query - this was tested by accident during development and caused the streaming job to stop picking up new files correctly for the rest of that session. Stop the streaming job first (Ctrl+C), confirm it has exited, then run clean.
+**Important: only run either of these while the streaming job is stopped.** Running `python main.py clean` while `python main.py stream` is still active deletes the checkpoint directory out from under a live, running query - this was tested by accident during development and caused the streaming job to stop picking up new files correctly for the rest of that session. Stop the streaming job first (Ctrl+C), confirm it has exited, then run clean or reset.
 
+There are two levels of reset:
 
+**`python main.py clean`** - local files only.
 
    python main.py clean
 
-Removes generated/archived CSV files and clears the Spark checkpoint. This does NOT touch database rows. To also clear stored data, run this manually in PostgreSQL (it is a destructive action and is deliberately not automated - see docs/retention_policy.md):
+Removes generated/archived CSV files and clears the Spark checkpoint. This does NOT touch database rows, guaranteed - that is why clearing the tables is a separate command rather than a flag on this one.
 
-   TRUNCATE TABLE events, rejected_events;
+**`python main.py reset`** - local files AND all database tables.
+
+   python main.py reset
+
+Does everything clean does, then truncates events, rejected_events, staging_events, and stream_metrics. Because this permanently destroys stored data, it asks for confirmation first and only proceeds if you type `yes`. To skip the prompt in a script or CI context:
+
+   python main.py reset --force
+
+If the database cannot be reached, reset stops before deleting anything at all - including local files - rather than leaving you with wiped CSVs and a still-full database.
+
+Prefer doing it by hand in pgAdmin? The equivalent SQL is still perfectly valid:
+
+   TRUNCATE TABLE events, rejected_events, staging_events, stream_metrics;
 
 ## Checking Environment Status
 

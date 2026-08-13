@@ -38,5 +38,13 @@ Documents how long each category of data/file is kept, and when it should be rem
 For a genuinely clean local test environment:
 
 1. Stop the streaming job (Ctrl+C) and confirm it has fully exited
-2. python main.py clean - removes generated/archived CSVs and clears the checkpoint
-3. In PostgreSQL: TRUNCATE TABLE events, rejected_events, staging_events, stream_metrics; - clears stored data (not automated; must be run manually, deliberately, since this is a destructive action)
+2. python main.py reset - removes generated/archived CSVs, clears the checkpoint, and truncates events, rejected_events, staging_events, and stream_metrics
+
+Because step 2 permanently destroys stored data, reset asks for explicit confirmation (type `yes`) before doing anything. It is a separate command from `clean` precisely so that destruction is always a deliberate choice: `clean` never touches the database under any circumstances, and no flag makes it do so. For non-interactive use in a script or CI, `python main.py reset --force` skips the prompt.
+
+If the database is unreachable, reset changes nothing at all - not even the local files - rather than half-completing.
+
+Two narrower options remain available:
+
+- **Local files only, keeping stored rows:** python main.py clean
+- **Database only, by hand:** in PostgreSQL, TRUNCATE TABLE events, rejected_events, staging_events, stream_metrics; - still perfectly valid for anyone who prefers running it directly in pgAdmin

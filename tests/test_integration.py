@@ -59,6 +59,7 @@ def clean_tables():
     database.execute_statement("TRUNCATE TABLE events, staging_events;")
 
 
+@pytest.mark.integration
 def test_valid_rows_reach_events_table_via_staging(spark):
     """
     The full write path: stage via Spark's bulk JDBC writer, then
@@ -85,6 +86,7 @@ def test_valid_rows_reach_events_table_via_staging(spark):
     assert str(rows[0][0]) == "11111111-1111-1111-1111-111111111111"
 
 
+@pytest.mark.integration
 def test_merge_is_idempotent_on_duplicate_event_id(spark):
     """
     Running the same event_id through the write path twice (e.g. a
@@ -113,6 +115,7 @@ def test_merge_is_idempotent_on_duplicate_event_id(spark):
     assert rows[0][0] == 1
 
 
+@pytest.mark.integration
 def test_staging_table_is_empty_after_successful_merge(spark):
     """Staged rows for a batch should be deleted once merged - see docs/engineering_decisions.md."""
     run_id = str(uuid.uuid4())
