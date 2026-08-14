@@ -52,7 +52,7 @@ real-time-data-pipeline-spark-postgresql/
     ├── user_guide.md
     ├── architecture.md
     ├── sequence_and_state.md
-    ├── engineering_decisions.md
+    ├── engineering_decisions.md    #part of ADR
     ├── data_dictionary.md
     ├── data_contract.md
     ├── performance_methodology.md
